@@ -308,14 +308,14 @@ pub fn build_executable(
 
     if options.enable_lto {
         cc.arg("-flto");
-        // Enable LTO optimization level matching the codegen level
+        // Note: clang doesn't support -flto=O2/O3, use -O flags instead
         match options.opt_level {
             CodegenOptLevel::None => {}
             CodegenOptLevel::Default => {
-                cc.arg("-flto=O2");
+                cc.arg("-O2");
             }
             CodegenOptLevel::Aggressive => {
-                cc.arg("-flto=O3");
+                cc.arg("-O3");
             }
         }
     }
@@ -516,14 +516,14 @@ pub fn build_shared_library(
 
     if options.enable_lto {
         cc.arg("-flto");
-        // Enable LTO optimization level matching the codegen level
+        // Note: clang doesn't support -flto=O2/O3, use -O flags instead
         match options.opt_level {
             CodegenOptLevel::None => {}
             CodegenOptLevel::Default => {
-                cc.arg("-flto=O2");
+                cc.arg("-O2");
             }
             CodegenOptLevel::Aggressive => {
-                cc.arg("-flto=O3");
+                cc.arg("-O3");
             }
         }
     }
