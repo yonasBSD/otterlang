@@ -22,6 +22,7 @@ Cargo.lock
 # Cache directories
 .cache/
 *.cache
+.otter_cache/
 .otter_cache_local/
 
 # Temporary files
