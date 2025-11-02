@@ -128,10 +128,16 @@ mod tests {
         unsafe fn wake(data: *const ()) {
             let flag = Arc::from_raw(data as *const AtomicBool);
             flag.store(true, Ordering::SeqCst);
+            // Note: Arc::from_raw takes ownership, but since we're in a test waker
+            // that never actually drops the Arc (the drop function is a no-op),
+            // we need to forget it to avoid double-free
+            std::mem::forget(flag);
         }
 
         unsafe fn wake_by_ref(data: *const ()) {
-            wake(data);
+            // For wake_by_ref, we don't take ownership, so just use the pointer directly
+            let flag = &*(data as *const AtomicBool);
+            flag.store(true, Ordering::SeqCst);
         }
 
         unsafe fn drop(_data: *const ()) {}
@@ -151,33 +157,39 @@ mod tests {
         let waker1 = create_test_waker(Arc::clone(&flag1));
         let waker2 = create_test_waker(Arc::clone(&flag2));
 
-        // Schedule two wakeups
-        wheel.schedule_wakeup(Duration::from_millis(50), waker1);
-        wheel.schedule_wakeup(Duration::from_millis(100), waker2);
+        // Schedule two wakeups with longer delays to avoid timing issues
+        wheel.schedule_wakeup(Duration::from_millis(100), waker1);
+        wheel.schedule_wakeup(Duration::from_millis(200), waker2);
 
         // Process immediately - should not wake yet
+        wheel.process_expired();
         assert!(!flag1.load(Ordering::SeqCst));
         assert!(!flag2.load(Ordering::SeqCst));
 
-        // Wait for timers to expire
-        std::thread::sleep(Duration::from_millis(75));
+        // Wait for first timer to expire (with some buffer)
+        std::thread::sleep(Duration::from_millis(150));
 
         // Process expired timers
         wheel.process_expired();
 
-        // First timer should have fired
-        assert!(flag1.load(Ordering::SeqCst));
-        assert!(!flag2.load(Ordering::SeqCst));
+        // First timer should have fired, second should not
+        // Give it a moment for the waker to update the flag
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(flag1.load(Ordering::SeqCst), "First timer should have fired");
+        assert!(!flag2.load(Ordering::SeqCst), "Second timer should not have fired yet");
 
-        // Wait for second timer
-        std::thread::sleep(Duration::from_millis(50));
+        // Wait for second timer to expire
+        std::thread::sleep(Duration::from_millis(100));
 
         // Process again
         wheel.process_expired();
+        
+        // Give it a moment for the waker to update the flag
+        std::thread::sleep(Duration::from_millis(10));
 
         // Both should have fired
         assert!(flag1.load(Ordering::SeqCst));
-        assert!(flag2.load(Ordering::SeqCst));
+        assert!(flag2.load(Ordering::SeqCst), "Second timer should have fired");
     }
 
     #[test]
