@@ -20,8 +20,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm-15 llvm-15-dev clang-15
+          sudo apt-get install -y llvm-15 llvm-15-dev clang-15 || true
+          # Try to install Polly if available (may not exist in all repos)
+          sudo apt-get install -y libpolly-15-dev 2>/dev/null || echo "Polly not available in repo"
           echo "LLVM_SYS_150_PREFIX=/usr/lib/llvm-15" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/lib/llvm-15/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          # Set library search path for linker
+          echo "LIBRARY_PATH=/usr/lib/llvm-15/lib:${LIBRARY_PATH:-}" >> $GITHUB_ENV
       
       - name: Install LLVM 15 (macOS)
         if: matrix.os == 'macos-latest'
@@ -51,16 +56,22 @@ jobs:
       - name: Build
         env:
           LLVM_SYS_150_PREFIX: ${{ env.LLVM_SYS_150_PREFIX }}
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          LIBRARY_PATH: ${{ env.LIBRARY_PATH }}
         run: cargo build --verbose
       
       - name: Run tests
         env:
           LLVM_SYS_150_PREFIX: ${{ env.LLVM_SYS_150_PREFIX }}
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          LIBRARY_PATH: ${{ env.LIBRARY_PATH }}
         run: cargo test --verbose
       
       - name: Build examples
         env:
           LLVM_SYS_150_PREFIX: ${{ env.LLVM_SYS_150_PREFIX }}
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          LIBRARY_PATH: ${{ env.LIBRARY_PATH }}
         run: |
           cargo build --release
           for example in examples/*.otter; do
