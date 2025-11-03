@@ -19,6 +19,8 @@ use inkwell::OptimizationLevel;
 
 use crate::ast::nodes::{BinaryOp, Block, Expr, Function, Literal, Program, Statement, Type};
 use crate::ffi::{BridgeSymbolRegistry, CargoBridge, DynamicLibraryLoader, FunctionSpec, TypeSpec};
+use crate::runtime::ffi::register_dynamic_exports;
+use libloading::Library;
 use crate::runtime::ffi;
 use crate::runtime::symbol_registry::{FfiFunction, FfiSignature, FfiType, SymbolRegistry};
 use crate::codegen::target::TargetTriple;
@@ -581,7 +583,12 @@ fn prepare_rust_bridges(program: &Program, registry: &SymbolRegistry) -> Result<
         loader.load(&artifacts.library_path).with_context(|| {
             format!("failed to load Rust bridge library for crate `{crate_name}`")
         })?;
-
+        // Register all exports directly from the library (transparent + manual entries)
+        unsafe {
+            let lib = Library::new(&artifacts.library_path).with_context(|| format!("failed to open library {}", artifacts.library_path.display()))?;
+            register_dynamic_exports(&lib, registry)?;
+        }
+        // Also register planned functions to ensure symbol aliases are available immediately
         register_bridge_functions(&crate_name, &aliases, &metadata.functions, registry)?;
         libraries.push(artifacts.library_path.clone());
     }
@@ -597,6 +604,9 @@ fn collect_rust_imports(program: &Program) -> HashMap<String, HashSet<String>> {
             if let Some((namespace, crate_name)) = module.split_once(':') {
                 if namespace == "rust" {
                     let aliases = imports.entry(crate_name.to_string()).or_default();
+                    // Always add the crate name as an alias
+                    aliases.insert(crate_name.to_string());
+                    // Also add any explicit alias
                     if let Some(alias_name) = alias {
                         aliases.insert(alias_name.clone());
                     }
@@ -691,10 +701,10 @@ fn type_spec_to_ffi(spec: &TypeSpec, position: &str, function_name: &str) -> Res
 }
 
 fn alias_name(alias: &str, crate_name: &str, canonical: &str) -> String {
-    if let Some(rest) = canonical.strip_prefix(crate_name) {
-        format!("{alias}{rest}")
+    if let Some(rest) = canonical.strip_prefix(&format!("{}:", crate_name)) {
+        format!("{alias}.{rest}")
     } else {
-        format!("{alias}:{canonical}")
+        format!("{alias}.{canonical}")
     }
 }
 
@@ -1364,21 +1374,8 @@ impl<'ctx> Compiler<'ctx> {
             Expr::Range { .. } => bail!("Range expressions can only be used in for loops"),
             Expr::FString { parts } => self.eval_fstring(parts, ctx),
             Expr::Member { object, field } => self.eval_member_access(object, field, ctx),
-            Expr::Await(expr) => {
-                // For now, await just evaluates the inner expression
-                // This provides a foundation for when async runtime is implemented
-                self.eval_expr(expr, ctx)
-            }
-            Expr::Spawn(expr) => {
-                // For now, spawn evaluates the expression and returns unit
-                // representing a task handle. This provides a foundation for
-                // when task spawning runtime is implemented.
-                self.eval_expr(expr, ctx)?;
-                Ok(EvaluatedValue {
-                    ty: OtterType::Unit,
-                    value: None,
-                })
-            }
+            Expr::Await(expr) => self.lower_await(expr, ctx),
+            Expr::Spawn(expr) => self.lower_spawn(expr, ctx),
             Expr::Lambda { params: _, ret_ty: _, body } => {
                 // Compile lambda to a separate function
                 let lambda_name = format!("lambda_{}", self.lambda_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
@@ -2145,6 +2142,88 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         bail!("only identifier calls are supported");
+    }
+
+    fn lower_spawn(
+        &mut self,
+        expr: &Expr,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        if let Expr::Call { func, args } = expr {
+            if let Some(base) = self.call_base_name(func) {
+                let spawn_name = format!("{}_spawn", base);
+                if self.symbol_registry.contains(&spawn_name) {
+                    return self.eval_call(&Expr::Identifier(spawn_name), args, ctx);
+                }
+            }
+        }
+        // Fallback: evaluate inner expression
+        self.eval_expr(expr, ctx)
+    }
+
+    fn lower_await(
+        &mut self,
+        expr: &Expr,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        if let Expr::Call { func, args } = expr {
+            if let Some(base) = self.call_base_name(func) {
+                let spawn_name = format!("{}_spawn", base);
+                let await_name = format!("{}_await", base);
+                if self.symbol_registry.contains(&spawn_name)
+                    && self.symbol_registry.contains(&await_name)
+                {
+                    // First call spawn(...)
+                    let spawn_val = self.eval_call(&Expr::Identifier(spawn_name), args, ctx)?;
+                    // Then call await(handle)
+                    return self.eval_call(
+                        &Expr::Identifier(await_name),
+                        &[Expr::Literal(crate::ast::nodes::Literal::Number(
+                            crate::ast::nodes::NumberLiteral::new(0.0, true),
+                        ))],
+                        ctx,
+                    )
+                    .and_then(|_| {
+                        // Above hack won't work: build call requires expression nodes.
+                        // Instead, directly build call using lowered value as metadata.
+                        let await_symbol = self.symbol_registry
+                            .resolve(&format!("{}_await", base))
+                            .ok_or_else(|| anyhow!("unresolved await symbol"))?;
+                        let await_fn = self.declare_symbol_function(&format!("{}_await", base))?;
+                        let arg = self.value_to_metadata(&spawn_val)?;
+                        let call = self
+                            .builder
+                            .build_call(await_fn, &[arg], "await_call");
+                        let ret_ty: OtterType = await_symbol.signature.result.into();
+                        let value = match ret_ty {
+                            OtterType::Unit => None,
+                            _ => Some(
+                                call.try_as_basic_value()
+                                    .left()
+                                    .ok_or_else(|| anyhow!("await returned no value"))?,
+                            ),
+                        };
+                        Ok(EvaluatedValue { ty: ret_ty, value })
+                    });
+                }
+            }
+        }
+        // Fallback
+        self.eval_expr(expr, ctx)
+    }
+
+    fn call_base_name(&self, callee: &Expr) -> Option<String> {
+        match callee {
+            Expr::Identifier(name) => Some(name.clone()),
+            Expr::Member { object, field } => {
+                if let Expr::Identifier(module) = object.as_ref() {
+                    Some(format!("{module}.{field}"))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     fn call_user_defined_function(

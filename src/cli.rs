@@ -282,7 +282,8 @@ fn compile_pipeline(
     })?;
 
     // Type check the program
-    let mut type_checker = TypeChecker::new();
+    let mut type_checker = TypeChecker::new()
+        .with_registry(crate::runtime::symbol_registry::SymbolRegistry::global());
     if let Err(err) = profiler.record_phase("Type Checking", || {
         type_checker.check_program(&program)
     }) {

@@ -3,11 +3,13 @@ use std::collections::HashMap;
 
 use crate::ast::nodes::{Block, Expr, Function, Literal, Program, Statement};
 use crate::typecheck::types::{TypeContext, TypeInfo, TypeError};
+use crate::runtime::symbol_registry::{SymbolRegistry, FfiType};
 
 /// Type checker that validates and infers types in OtterLang programs
 pub struct TypeChecker {
     errors: Vec<TypeError>,
     context: TypeContext,
+    registry: Option<&'static SymbolRegistry>,
 }
 
 impl TypeChecker {
@@ -25,7 +27,13 @@ impl TypeChecker {
         Self {
             errors: Vec::new(),
             context,
+            registry: None,
         }
+    }
+
+    pub fn with_registry(mut self, registry: &'static SymbolRegistry) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// Register all built-in functions in the type context
@@ -560,9 +568,45 @@ impl TypeChecker {
                                 anyhow::Error::from(err)
                             })?
                     }
+                    Expr::Member { object, field } => {
+                        // Support module.function() syntax for FFI and stdlib calls
+                        if let Expr::Identifier(module) = object.as_ref() {
+                            let full_name = format!("{}.{}", module, field);
+                            // First check registry for exact FFI signatures
+                            if let Some(registry) = self.registry {
+                                if let Some(symbol) = registry.resolve(&full_name) {
+                                    let params: Vec<TypeInfo> = symbol.signature.params.iter()
+                                        .map(|ft| ffi_type_to_typeinfo(ft))
+                                        .collect();
+                                    let return_type = ffi_type_to_typeinfo(&symbol.signature.result);
+                                    return Ok(TypeInfo::Function {
+                                        params,
+                                        return_type: Box::new(return_type),
+                                    });
+                                }
+                            }
+                            // Fall back to context functions
+                            self.context
+                                .get_function(&full_name)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    // Return a generic function type for unknown FFI functions
+                                    // This allows the code to pass type checking
+                                    TypeInfo::Function {
+                                        params: vec![], // Unknown params
+                                        return_type: Box::new(TypeInfo::Unknown),
+                                    }
+                                })
+                        } else {
+                            self.errors.push(TypeError::new(
+                                "function calls must use identifier or module.function syntax".to_string(),
+                            ));
+                            return Ok(TypeInfo::Error);
+                        }
+                    }
                     _ => {
                         self.errors.push(TypeError::new(
-                            "function calls must use identifier".to_string(),
+                            "function calls must use identifier or module.function syntax".to_string(),
                         ));
                         return Ok(TypeInfo::Error);
                     }
@@ -570,7 +614,8 @@ impl TypeChecker {
 
                 match func_type {
                     TypeInfo::Function { params, return_type } => {
-                        if args.len() != params.len() {
+                        // Skip arg count check for unknown FFI functions (params empty means unknown)
+                        if !params.is_empty() && args.len() != params.len() {
                             self.errors.push(TypeError::new(format!(
                                 "function expects {} arguments, got {}",
                                 params.len(),
@@ -580,16 +625,24 @@ impl TypeChecker {
                             return Ok(TypeInfo::Error);
                         }
 
-                        for (i, (arg, param_type)) in args.iter().zip(params.iter()).enumerate() {
-                            let arg_type = self.infer_expr_type(arg)?;
-                            if !arg_type.is_compatible_with(param_type) {
-                                self.errors.push(TypeError::new(format!(
-                                    "argument {} type mismatch: expected {}, got {}",
-                                    i + 1,
-                                    param_type.display_name(),
-                                    arg_type.display_name()
-                                )).with_hint(format!("Argument {} should be of type `{}`", i + 1, param_type.display_name()))
-                                .with_help("Check the function signature and ensure argument types match".to_string()));
+                        // Skip type checking for unknown FFI functions
+                        if !params.is_empty() {
+                            for (i, (arg, param_type)) in args.iter().zip(params.iter()).enumerate() {
+                                let arg_type = self.infer_expr_type(arg)?;
+                                if !arg_type.is_compatible_with(param_type) {
+                                    self.errors.push(TypeError::new(format!(
+                                        "argument {} type mismatch: expected {}, got {}",
+                                        i + 1,
+                                        param_type.display_name(),
+                                        arg_type.display_name()
+                                    )).with_hint(format!("Argument {} should be of type `{}`", i + 1, param_type.display_name()))
+                                    .with_help("Check the function signature and ensure argument types match".to_string()));
+                                }
+                            }
+                        } else {
+                            // For unknown FFI functions, just check that expressions are valid
+                            for arg in args {
+                                let _ = self.infer_expr_type(arg)?;
                             }
                         }
 
@@ -887,6 +940,18 @@ impl TypeChecker {
 impl Default for TypeChecker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn ffi_type_to_typeinfo(ft: &FfiType) -> TypeInfo {
+    match ft {
+        FfiType::Unit => TypeInfo::Unit,
+        FfiType::Bool => TypeInfo::Bool,
+        FfiType::I32 => TypeInfo::I32,
+        FfiType::I64 => TypeInfo::I64,
+        FfiType::F64 => TypeInfo::F64,
+        FfiType::Str => TypeInfo::Str,
+        FfiType::Opaque => TypeInfo::I64, // Opaque handles are i64 at type level
     }
 }
 

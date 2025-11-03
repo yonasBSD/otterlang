@@ -182,9 +182,9 @@ pub struct StableExportSet {
     pub functions: RVec<StableFunction>,
 }
 
-type ExportFn = extern "C" fn() -> StableExportSet;
+pub type ExportFn = extern "C" fn() -> StableExportSet;
 
-fn register_dynamic_exports(library: &Library, registry: &SymbolRegistry) -> Result<()> {
+pub fn register_dynamic_exports(library: &Library, registry: &SymbolRegistry) -> Result<()> {
     unsafe {
         let exports = library
             .get::<ExportFn>(b"otterlang_exports")

@@ -1,15 +1,12 @@
+# Optional: Only specify dependency version/features if you need to pin them.
+# All public functions are automatically extracted via rustdoc JSON.
 dependency:
   name: "rand"
   version: "0.8"
-functions:
-  - name: "random_f64"
-    rust_path: "rand::random::<f64>()"
-    result: "F64"
-    doc: "Samples a random f64 in the range [0, 1)."
-  - name: "uniform"
-    params: ["F64", "F64"]
-    result: "F64"
-    doc: "Samples a random f64 in [min, max) via Uniform distribution."
-    call:
-      kind: expr
-      expr: "rand::distributions::Uniform::new({0},{1}).sample(&mut rand::thread_rng())"
+# Functions are automatically extracted - no need to list them manually!
+# When rustdoc extraction works (requires nightly Rust), all functions
+# are automatically discovered and exposed.
+# 
+# For now, bridge.yaml is empty to demonstrate transparent extraction.
+# When nightly is available, functions will be auto-extracted.
+# Otherwise, you can add functions here as needed.

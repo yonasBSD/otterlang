@@ -7,7 +7,8 @@ use tracing::debug;
 
 use crate::cache::path::cache_root;
 
-use super::metadata::BridgeMetadata;
+use super::metadata::{BridgeMetadata, CrateSpec};
+use super::rustdoc_extractor::extract_crate_spec;
 use super::rust_stubgen::{RustStubGenerator, StubSource};
 use super::symbol_registry::BridgeSymbolRegistry;
 
@@ -36,10 +37,74 @@ impl CargoBridge {
     /// Ensures a bridge crate exists and is compiled for the requested `crate_name`.
     /// Function metadata is resolved through the shared `BridgeSymbolRegistry`
     /// which in turn consults bridge manifests under `ffi/<crate>/bridge.yaml`.
+    /// Bridges are cached by a hash of crate name + version + features.
     pub fn ensure_bridge(&self, crate_name: &str) -> Result<BridgeArtifacts> {
         let metadata = self.registry.ensure_metadata(crate_name)?;
-        self.write_bridge(&metadata)?;
-        let crate_root = self.root.join(crate_name);
+        let cache_hash = metadata.dependency.cache_hash();
+        
+        // Use hash-based cache directory: <crate_name>-<hash>
+        let cache_dir_name = format!("{}-{}", crate_name, cache_hash);
+        let crate_root = self.root.join(&cache_dir_name);
+        
+        // Check if library already exists in cache
+        let package_name = format!("otterffi_{}", crate_name);
+        let library_filename = libloading::library_filename(&package_name);
+        let cached_library = crate_root
+            .join("target")
+            .join("release")
+            .join(&library_filename);
+        
+        if cached_library.exists() {
+            debug!(
+                crate = %crate_name,
+                hash = %cache_hash,
+                "using cached bridge crate"
+            );
+            return Ok(BridgeArtifacts {
+                crate_root: crate_root.clone(),
+                manifest_path: crate_root.join("Cargo.toml"),
+                library_path: cached_library,
+            });
+        }
+        
+        // Precompute transparent crate spec (rustdoc JSON) and synthesize auto functions
+        // If extraction fails (e.g., needs nightly Rust), fall back to bridge.yaml gracefully
+        let spec: CrateSpec = extract_crate_spec(&metadata.dependency)
+            .unwrap_or_else(|e| {
+                debug!("rustdoc extraction failed for {}: {}, falling back to bridge.yaml", crate_name, e);
+                CrateSpec { name: crate_name.to_string(), version: metadata.dependency.version.clone(), items: Vec::new() }
+            });
+        let generator = super::rust_stubgen::RustStubGenerator::new(
+            metadata.crate_name.clone(),
+            metadata.dependency.clone(),
+        );
+        
+        // Prioritize transparent extraction: if we got items from rustdoc, use those
+        // bridge.yaml functions are only used as overrides/additions
+        let functions = if !spec.items.is_empty() {
+            debug!("Extracted {} items from rustdoc for {}", spec.items.len(), crate_name);
+            // Transparent extraction succeeded - use auto-generated functions
+            generator.functions_from_crate_spec(&spec)
+        } else {
+            // Transparent extraction failed or returned empty - fall back to bridge.yaml
+            debug!("No items extracted from rustdoc for {}, using bridge.yaml functions", crate_name);
+            Vec::new()
+        };
+        
+        // Merge in bridge.yaml functions (these can override or add to transparent ones)
+        // Use a map to avoid duplicates by name
+        let mut function_map: std::collections::HashMap<String, _> = functions
+            .into_iter()
+            .map(|f| (f.name.clone(), f))
+            .collect();
+        
+        for manual_func in metadata.functions.iter() {
+            // bridge.yaml functions override transparent ones with same name
+            function_map.insert(manual_func.name.clone(), manual_func.clone());
+        }
+        
+        let final_functions: Vec<_> = function_map.into_values().collect();
+        self.write_bridge_with_functions(&metadata, &final_functions, &crate_root)?;
         let library_path = self
             .build_bridge(crate_name, &crate_root)
             .context("failed to compile bridge crate")?;
@@ -51,8 +116,18 @@ impl CargoBridge {
         })
     }
 
-    fn write_bridge(&self, metadata: &BridgeMetadata) -> Result<()> {
-        let crate_root = self.ensure_scaffold(&metadata.crate_name)?;
+    fn write_bridge_with_functions(
+        &self,
+        metadata: &BridgeMetadata,
+        functions: &[super::rust_stubgen::FunctionSpec],
+        crate_root: &Path,
+    ) -> Result<()> {
+        fs::create_dir_all(crate_root).with_context(|| {
+            format!(
+                "failed to create bridge crate directory {}",
+                crate_root.display()
+            )
+        })?;
         let manifest_path = crate_root.join("Cargo.toml");
         let src_dir = crate_root.join("src");
         fs::create_dir_all(&src_dir)
@@ -60,22 +135,11 @@ impl CargoBridge {
 
         let generator =
             RustStubGenerator::new(metadata.crate_name.clone(), metadata.dependency.clone());
-        let stub = generator.generate(&metadata.functions);
+        let stub = generator.generate(functions);
         self.write_manifest(&manifest_path, &stub)?;
         self.write_stub(&src_dir.join("lib.rs"), &stub)?;
 
         Ok(())
-    }
-
-    fn ensure_scaffold(&self, crate_name: &str) -> Result<PathBuf> {
-        let crate_root = self.root.join(crate_name);
-        fs::create_dir_all(&crate_root).with_context(|| {
-            format!(
-                "failed to create bridge crate directory {}",
-                crate_root.display()
-            )
-        })?;
-        Ok(crate_root)
     }
 
     fn write_manifest(&self, manifest_path: &Path, stub: &StubSource) -> Result<()> {

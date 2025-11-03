@@ -47,7 +47,8 @@ impl OtterLangServer {
                 match parse(&tokens) {
                     Ok(program) => {
                         // Type check
-                        let mut checker = TypeChecker::new();
+                        let mut checker = TypeChecker::new()
+                            .with_registry(crate::runtime::symbol_registry::SymbolRegistry::global());
                         if let Err(errors) = checker.check_program(&program) {
                             for error in errors {
                                 diagnostics.push(Diagnostic {

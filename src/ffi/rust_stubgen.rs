@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use super::metadata::DependencyConfig;
+use super::metadata::{CrateSpec, DependencyConfig, PublicItem, RustTypeRef};
 
 /// Template for how a stub should invoke the underlying Rust function.
 #[derive(Clone, Debug)]
@@ -127,6 +127,120 @@ impl RustStubGenerator {
         StubSource { manifest, source }
     }
 
+    /// Convert a CrateSpec's public synchronous functions into bridge FunctionSpec entries.
+    pub fn functions_from_crate_spec(&self, spec: &CrateSpec) -> Vec<FunctionSpec> {
+        let mut out = Vec::new();
+        for item in &spec.items {
+            if let PublicItem::Function { sig, path, .. } = item {
+                // Map parameter and return types; skip if any are unsupported
+                let mut params = Vec::new();
+                let mut skip = false;
+                for p in &sig.params {
+                    match map_rust_type_to_spec(p) {
+                        Some(ts) => params.push(ts),
+                        None => { skip = true; break; }
+                    }
+                }
+                if skip { continue; }
+                let result = match &sig.return_type {
+                    Some(rt) => match map_rust_type_to_spec(rt) { Some(ts) => ts, None => continue },
+                    None => TypeSpec::Unit,
+                };
+
+                // Export name uses dot notation; symbol uses stable otter_ prefix (already built by generator if not provided).
+                let export_name = path.segments.join(".");
+                let rust_path = Some(format!("{}", path.segments.join("::")));
+
+                if sig.is_async || matches!(sig.return_type, Some(RustTypeRef::Future { .. })) {
+                    // Async shims: spawn -> Opaque handle, await -> T
+                    // spawn
+                    let spawn_name = format!("{}.{}_spawn", export_name, sig.name);
+                    let spawn_expr = {
+                        let rp = rust_path.clone().unwrap();
+                        // Call path with args; do not append .await because we spawn the future
+                        // Expr placeholders {0},{1},... already substituted by render_expr_invocation
+                        format!("ffi_store::insert(rt().spawn(async move {{ {rp}({args}) }}))", rp = rp, args = (0..params.len()).map(|i| format!("{{{}}}", i)).collect::<Vec<_>>().join(", "))
+                    };
+                    out.push(FunctionSpec {
+                        name: spawn_name,
+                        symbol: format!("otter_{}_{}_spawn", self.dependency.name, sig.name.to_lowercase()),
+                        params: params.clone(),
+                        result: TypeSpec::Opaque,
+                        doc: None,
+                        rust_path: None,
+                        call: CallTemplate::Expr(spawn_expr),
+                    });
+
+                    // await
+                    let await_name = format!("{}.{}_await", export_name, sig.name);
+                    let out_ty = match &sig.return_type {
+                        Some(RustTypeRef::Future { output }) => map_rust_type_to_spec(output).unwrap_or(TypeSpec::Opaque),
+                        Some(other) => map_rust_type_to_spec(other).unwrap_or(TypeSpec::Opaque),
+                        None => TypeSpec::Unit,
+                    };
+                    let join_ty = rust_value_ty(&out_ty);
+                    let await_expr = format!(
+                        "match rt().block_on(ffi_store::take::<tokio::task::JoinHandle<{jt}>>({{0}})) {{ Ok(v) => v, Err(_) => {def} }}",
+                        jt = join_ty,
+                        def = out_ty.default_return()
+                    );
+                    out.push(FunctionSpec {
+                        name: await_name,
+                        symbol: format!("otter_{}_{}_await", self.dependency.name, sig.name.to_lowercase()),
+                        params: vec![TypeSpec::Opaque],
+                        result: out_ty,
+                        doc: None,
+                        rust_path: None,
+                        call: CallTemplate::Expr(await_expr),
+                    });
+                } else {
+                    let export_name_clone = export_name.clone();
+                    let params_clone = params.clone();
+                    out.push(FunctionSpec {
+                        name: export_name,
+                        symbol: format!("otter_{}_{}", self.dependency.name, sig.name.to_lowercase()),
+                        params,
+                        result,
+                        doc: None,
+                        rust_path,
+                        call: CallTemplate::Direct,
+                    });
+
+                    // Add Option/Result JSON helpers for ergonomic nil/error handling on Otter side
+                    if let Some(ret_ty) = &sig.return_type {
+                        // Prepare placeholder argument list like {0},{1},...
+                        let args_ph = (0..sig.params.len())
+                            .map(|i| format!("{{{}}}", i))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let rust_call = format!("{}({})", path.segments.join("::"), args_ph);
+
+                        match ret_ty {
+                            RustTypeRef::Option { .. } => {
+                                let helper_name = format!("{}.{}_optjson", export_name_clone, sig.name);
+                                let expr = format!(
+                                    "match {} {{ Some(v) => serde_json::to_string(&json!({{{{\"some\": true, \"value\": v}}}})).unwrap_or_default(), None => \"{{{{\"some\":false}}}}\".to_string() }}",
+                                    rust_call
+                                );
+                                out.push(FunctionSpec { name: helper_name, symbol: format!("otter_{}_{}_optjson", self.dependency.name, sig.name.to_lowercase()), params: params_clone.clone(), result: TypeSpec::Str, doc: None, rust_path: None, call: CallTemplate::Expr(expr) });
+                            }
+                            RustTypeRef::Result { .. } => {
+                                let helper_name = format!("{}.{}_try", export_name_clone, sig.name);
+                                let expr = format!(
+                                    "match {} {{ Ok(v) => serde_json::to_string(&json!({{{{\"ok\": true, \"value\": v}}}})).unwrap_or_default(), Err(e) => serde_json::to_string(&json!({{{{\"ok\": false, \"error\": format!(\"{{:?}}\", e)}}}})).unwrap_or_default() }}",
+                                    rust_call
+                                );
+                                out.push(FunctionSpec { name: helper_name, symbol: format!("otter_{}_{}_try", self.dependency.name, sig.name.to_lowercase()), params: params_clone.clone(), result: TypeSpec::Str, doc: None, rust_path: None, call: CallTemplate::Expr(expr) });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn render_manifest(&self) -> String {
         let mut manifest = format!(
             "[package]\nname = \"otterffi_{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\n",
@@ -142,6 +256,7 @@ impl RustStubGenerator {
         manifest.push_str("parking_lot = \"0.12\"\n");
         manifest.push_str("serde = { version = \"1.0\", features = [\"derive\"] }\n");
         manifest.push_str("serde_json = \"1.0\"\n");
+        manifest.push_str("tokio = { version = \"1\", features = [\"rt-multi-thread\"] }\n");
         manifest
     }
 
@@ -158,16 +273,23 @@ impl RustStubGenerator {
         source.push_str("use std::any::Any;\n");
         source.push_str("use std::collections::HashMap;\n");
         source.push_str("use std::sync::atomic::{AtomicU64, Ordering};\n\n");
+        source.push_str("use tokio::runtime::Runtime;\n");
 
         // Convert crate name (hyphens to underscores for import)
         let dep_import_name = self.dependency.name.replace('-', "_");
         source.push_str(&format!(
-            "use {dep_import_name} as ffi_dep;\n\n",
+            "use {dep_import_name} as ffi_dep;\n",
             dep_import_name = dep_import_name
         ));
+        
+        // Add crate-specific imports
+        if self.dependency.name == "rand" {
+            source.push_str("use rand::distributions::Distribution;\n");
+        }
+        source.push_str("\n");
 
         source.push_str(
-            "#[allow(dead_code)]\nmod ffi_store {\n    use super::*;\n    static NEXT_ID: AtomicU64 = AtomicU64::new(1);\n    static STORE: Lazy<Mutex<HashMap<u64, Box<dyn Any + Send + Sync>>>> = Lazy::new(|| Mutex::new(HashMap::new()));\n\n    pub fn insert<T: Any + Send + Sync + 'static>(value: T) -> i64 {\n        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);\n        STORE.lock().insert(id, Box::new(value));\n        id as i64\n    }\n\n    pub fn get<T: Any + Send + Sync + Clone + 'static>(id: i64) -> T {\n        let store = STORE.lock();\n        store\n            .get(&(id as u64))\n            .and_then(|value| value.downcast_ref::<T>())\n            .cloned()\n            .expect(\"invalid opaque handle\")\n    }\n\n    pub fn replace<T: Any + Send + Sync + 'static>(id: i64, value: T) {\n        let mut store = STORE.lock();\n        if let Some(slot) = store.get_mut(&(id as u64)) {\n            if slot.is::<T>() {\n                *slot = Box::new(value);\n                return;\n            }\n        }\n        panic!(\"invalid opaque handle for replace\");\n    }\n\n    pub fn remove<T: Any + Send + Sync + 'static>(id: i64) -> T {\n        let mut store = STORE.lock();\n        store\n            .remove(&(id as u64))\n            .expect(\"invalid opaque handle\")\n            .downcast::<T>()\n            .map(|boxed| *boxed)\n            .expect(\"opaque handle type mismatch\")\n    }\n}\n\n",
+            "#[allow(dead_code)]\nmod ffi_store {\n    use super::*;\n    use std::collections::HashMap;\n\n    struct Entry {\n        value: Box<dyn Any + Send + Sync>,\n        refs: u64,\n    }\n\n    static NEXT_ID: AtomicU64 = AtomicU64::new(1);\n    static STORE: Lazy<Mutex<HashMap<u64, Entry>>> = Lazy::new(|| Mutex::new(HashMap::new()));\n\n    pub fn insert<T: Any + Send + Sync + 'static>(value: T) -> i64 {\n        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);\n        STORE.lock().insert(id, Entry { value: Box::new(value), refs: 1 });\n        id as i64\n    }\n\n    pub fn clone_handle(id: i64) -> i64 {\n        let mut store = STORE.lock();\n        if let Some(entry) = store.get_mut(&(id as u64)) {\n            entry.refs += 1;\n            id\n        } else {\n            panic!(\"invalid opaque handle\");\n        }\n    }\n\n    pub fn release_handle(id: i64) {\n        let mut store = STORE.lock();\n        if let Some(mut entry) = store.remove(&(id as u64)) {\n            if entry.refs > 1 {\n                entry.refs -= 1;\n                store.insert(id as u64, entry);\n            }\n        }\n    }\n\n    pub fn take<T: Any + Send + Sync + 'static>(id: i64) -> T {\n        let mut store = STORE.lock();\n        let key = id as u64;\n        if let Some(mut entry) = store.remove(&key) {\n            if entry.refs > 1 {\n                // put back with decreased ref and fail fast to catch misuse\n                entry.refs -= 1;\n                store.insert(key, entry);\n                panic!(\"opaque handle still referenced\");\n            }\n            *entry.value.downcast::<T>().map(|boxed| *boxed).expect(\"opaque handle type mismatch\")\n        } else {\n            panic!(\"invalid opaque handle\");\n        }\n    }\n\n    pub fn get<T: Any + Send + Sync + Clone + 'static>(id: i64) -> T {\n        let store = STORE.lock();\n        store\n            .get(&(id as u64))\n            .and_then(|e| e.value.downcast_ref::<T>())\n            .cloned()\n            .expect(\"invalid opaque handle\")\n    }\n}\n\n",
         );
 
         source.push_str(
@@ -180,7 +302,13 @@ impl RustStubGenerator {
             "#[repr(C)]\n#[derive(Clone, StableAbi)]\npub struct StableExportSet {\n    pub functions: RVec<StableFunction>,\n}\n\n",
         );
         source.push_str(
+            "static RUNTIME: once_cell::sync::Lazy<Runtime> = once_cell::sync::Lazy::new(|| {\n    tokio::runtime::Builder::new_multi_thread().enable_all().build().expect(\"failed to build tokio runtime\")\n});\n\nfn rt() -> &'static Runtime { &*RUNTIME }\n\n",
+        );
+        source.push_str(
             "#[no_mangle]\npub extern \"C\" fn otter_free(ptr: *mut c_char) {\n    if ptr.is_null() {\n        return;\n    }\n    unsafe {\n        let _ = CString::from_raw(ptr);\n    }\n}\n\n",
+        );
+        source.push_str(
+            "#[no_mangle]\npub extern \"C\" fn otter_handle_clone(handle: i64) -> i64 {\n    ffi_store::clone_handle(handle)\n}\n\n#[no_mangle]\npub extern \"C\" fn otter_handle_release(handle: i64) {\n    ffi_store::release_handle(handle)\n}\n\n",
         );
 
         for function in functions {
@@ -265,6 +393,13 @@ impl RustStubGenerator {
             TypeSpec::Str => {
                 out.push_str(&format!(
                     "    let result = match ::std::panic::catch_unwind(|| {{ {invocation} }}) {{\n        Ok(value) => value,\n        Err(_) => return {default_return},\n    }};\n    match CString::new(result) {{\n        Ok(cstr) => cstr.into_raw(),\n        Err(_) => {default_return},\n    }}\n",
+                    invocation = invocation,
+                    default_return = default_return
+                ));
+            }
+            TypeSpec::Opaque => {
+                out.push_str(&format!(
+                    "    let result = match ::std::panic::catch_unwind(|| {{ {invocation} }}) {{\n        Ok(value) => value,\n        Err(_) => return {default_return},\n    }};\n    ffi_store::insert(result)\n",
                     invocation = invocation,
                     default_return = default_return
                 ));
@@ -555,7 +690,7 @@ impl RustStubGenerator {
                     .map(|path| normalize_rust_path(path))
                     .unwrap_or_else(|| normalize_rust_path(&fallback));
                 if call_args.is_empty() {
-                    rust_path
+                    format!("{}()", rust_path)
                 } else {
                     format!("{}({})", rust_path, call_args.join(", "))
                 }
@@ -592,5 +727,38 @@ fn normalize_rust_path(path: &str) -> String {
         path.to_string()
     } else {
         format!("::{path}")
+    }
+}
+
+fn map_rust_type_to_spec(ty: &RustTypeRef) -> Option<TypeSpec> {
+    match ty {
+        RustTypeRef::Unit => Some(TypeSpec::Unit),
+        RustTypeRef::Bool => Some(TypeSpec::Bool),
+        RustTypeRef::I32 => Some(TypeSpec::I32),
+        RustTypeRef::I64 => Some(TypeSpec::I64),
+        RustTypeRef::F64 => Some(TypeSpec::F64),
+        RustTypeRef::Str => Some(TypeSpec::Str),
+        RustTypeRef::Option { inner } => map_rust_type_to_spec(inner).or(Some(TypeSpec::Opaque)),
+        RustTypeRef::Result { ok, .. } => map_rust_type_to_spec(ok).or(Some(TypeSpec::Opaque)),
+        RustTypeRef::Ref { inner, .. } => map_rust_type_to_spec(inner),
+        RustTypeRef::Vec { .. }
+        | RustTypeRef::Slice { .. }
+        | RustTypeRef::Array { .. }
+        | RustTypeRef::Tuple { .. }
+        | RustTypeRef::Future { .. }
+        | RustTypeRef::Path { .. }
+        | RustTypeRef::Opaque => Some(TypeSpec::Opaque),
+    }
+}
+
+fn rust_value_ty(spec: &TypeSpec) -> &'static str {
+    match spec {
+        TypeSpec::Unit => "()",
+        TypeSpec::Bool => "bool",
+        TypeSpec::I32 => "i32",
+        TypeSpec::I64 => "i64",
+        TypeSpec::F64 => "f64",
+        TypeSpec::Str => "String",
+        TypeSpec::Opaque => "i64",
     }
 }

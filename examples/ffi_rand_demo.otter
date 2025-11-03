@@ -1,0 +1,30 @@
+# Transparent FFI Demo: Using the rand crate
+# This demonstrates automatic bridge generation for Rust crates
+
+use rust:rand
+
+fn main:
+    print("🎲 Random Number Generator Demo")
+    print("")
+    
+    # Generate a random float in [0, 1)
+    let random1 = rand.random_f64()
+    let msg1 = f"Random float [0, 1): {random1}"
+    print(msg1)
+    
+    # Generate a random float in a uniform distribution [1, 10)
+    let random2 = rand.uniform(1.0, 10.0)
+    let msg2 = f"Uniform [1, 10): {random2}"
+    print(msg2)
+    
+    # Generate multiple random numbers
+    print("")
+    print("Rolling 5 dice:")
+    for i in 0..5:
+        let roll = rand.uniform(1.0, 7.0)
+        let die_msg = f"  Die {i + 1}: {roll}"
+        print(die_msg)
+    
+    print("")
+    print("✅ FFI transparent bridge working!")
+

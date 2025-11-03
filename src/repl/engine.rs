@@ -143,7 +143,8 @@ impl ReplEngine {
         }
 
         // Type check
-        let mut type_checker = TypeChecker::new();
+        let mut type_checker = TypeChecker::new()
+            .with_registry(crate::runtime::symbol_registry::SymbolRegistry::global());
         if let Err(_) = type_checker.check_program(&self.program) {
             // Remove the statements we just added
             for _ in 0..num_statements {
