@@ -26,14 +26,12 @@ impl Eq for TimerEntry {}
 
 impl PartialOrd for TimerEntry {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // Reverse ordering so earliest deadline is at the top
         Some(other.deadline.cmp(&self.deadline))
     }
 }
 
 impl Ord for TimerEntry {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse ordering so earliest deadline is at the top
         other.deadline.cmp(&self.deadline)
     }
 }
@@ -128,14 +126,10 @@ mod tests {
         unsafe fn wake(data: *const ()) {
             let flag = Arc::from_raw(data as *const AtomicBool);
             flag.store(true, Ordering::SeqCst);
-            // Note: Arc::from_raw takes ownership, but since we're in a test waker
-            // that never actually drops the Arc (the drop function is a no-op),
-            // we need to forget it to avoid double-free
             std::mem::forget(flag);
         }
 
         unsafe fn wake_by_ref(data: *const ()) {
-            // For wake_by_ref, we don't take ownership, so just use the pointer directly
             let flag = &*(data as *const AtomicBool);
             flag.store(true, Ordering::SeqCst);
         }
@@ -154,30 +148,24 @@ mod tests {
         let flag1 = Arc::new(AtomicBool::new(false));
         let flag2 = Arc::new(AtomicBool::new(false));
 
-        // Record start time to track elapsed time precisely
         let start = Instant::now();
         let waker1 = create_test_waker(Arc::clone(&flag1));
         let waker2 = create_test_waker(Arc::clone(&flag2));
 
-        // Schedule two wakeups with longer delays to avoid timing issues
         wheel.schedule_wakeup(Duration::from_millis(200), waker1);
         wheel.schedule_wakeup(Duration::from_millis(400), waker2);
 
-        // Process immediately - should not wake yet
         wheel.process_expired();
         assert!(!flag1.load(Ordering::SeqCst));
         assert!(!flag2.load(Ordering::SeqCst));
 
-        // Wait for first timer to expire - wait until we've passed the deadline
         while start.elapsed() < Duration::from_millis(250) {
             std::thread::sleep(Duration::from_millis(10));
             wheel.process_expired();
         }
 
-        // Small delay to ensure waker flags are updated
         std::thread::sleep(Duration::from_millis(20));
 
-        // First timer should have fired, second should not
         assert!(
             flag1.load(Ordering::SeqCst),
             "First timer should have fired"
@@ -188,16 +176,14 @@ mod tests {
             start.elapsed().as_millis()
         );
 
-        // Wait for second timer to expire - wait until we've passed the deadline
         while start.elapsed() < Duration::from_millis(450) {
             std::thread::sleep(Duration::from_millis(10));
             wheel.process_expired();
         }
 
-        // Small delay to ensure waker flags are updated
+        wheel.process_expired();
         std::thread::sleep(Duration::from_millis(20));
 
-        // Both should have fired
         assert!(flag1.load(Ordering::SeqCst));
         assert!(
             flag2.load(Ordering::SeqCst),
@@ -219,6 +205,6 @@ mod tests {
         assert!(timeout.is_some());
         let timeout = timeout.unwrap();
         assert!(timeout <= Duration::from_millis(100));
-        assert!(timeout >= Duration::from_millis(50)); // Allow some tolerance
+        assert!(timeout >= Duration::from_millis(50));
     }
 }
