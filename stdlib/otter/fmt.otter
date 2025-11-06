@@ -2,7 +2,7 @@
 
 # Print a line with newline
 fn println(msg: str):
-    print(msg)
+    print(f"{msg}\n")
 
 # Print to stderr with newline
 fn eprintln(msg: str):

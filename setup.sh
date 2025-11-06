@@ -1,21 +1,17 @@
 #!/bin/bash
-# OtterLang Setup Script
-# Installs the otter CLI globally for easy access
 
 set -e
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 echo -e "${CYAN}🦦 OtterLang Setup${NC}"
 echo ""
 
-# Check if Rust/Cargo is installed
 if ! command -v cargo &> /dev/null; then
     echo -e "${RED}❌ Cargo is not installed!${NC}"
     echo -e "${YELLOW}Please install Rust first: https://rustup.rs/${NC}"
@@ -24,10 +20,30 @@ fi
 
 echo -e "${GREEN}✅ Cargo found${NC}"
 
-# Get the directory where this script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+if ! command -v rustup &> /dev/null; then
+    echo -e "${YELLOW}⚠️  rustup not found. Installing nightly toolchain may not work.${NC}"
+    echo -e "${YELLOW}Please ensure rustup is installed: https://rustup.rs/${NC}"
+else
+    if ! rustup toolchain list | grep -q "nightly"; then
+        echo -e "${BLUE}📦 Installing Rust nightly toolchain (required for FFI features)...${NC}"
+        rustup toolchain install nightly
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}❌ Failed to install nightly toolchain${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ Nightly toolchain installed${NC}"
+    else
+        echo -e "${GREEN}✅ Rust nightly toolchain found${NC}"
+    fi
+    
+    echo -e "${BLUE}📦 Ensuring rust-src component for nightly...${NC}"
+    rustup component add rust-src --toolchain nightly 2>/dev/null || true
+    
+    echo -e "${BLUE}📦 Setting nightly as default toolchain for this project...${NC}"
+    rustup override set nightly 2>/dev/null || true
+fi
 
-# Check if we're in the otterlang directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ ! -f "$SCRIPT_DIR/Cargo.toml" ]; then
     echo -e "${RED}❌ Error: Cargo.toml not found!${NC}"
     echo -e "${YELLOW}Please run this script from the otterlang project directory${NC}"
@@ -37,7 +53,6 @@ fi
 echo -e "${BLUE}📦 Building OtterLang...${NC}"
 cd "$SCRIPT_DIR"
 
-# Build in release mode
 cargo build --release --quiet
 
 if [ $? -ne 0 ]; then
@@ -47,7 +62,6 @@ fi
 
 echo -e "${GREEN}✅ Build successful${NC}"
 
-# Install the binary
 echo -e "${BLUE}🚀 Installing otter command...${NC}"
 cargo install --path . --bin otter --force --quiet
 
@@ -56,7 +70,6 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Check if cargo bin is in PATH
 CARGO_BIN="$HOME/.cargo/bin"
 if [[ ":$PATH:" != *":$CARGO_BIN:"* ]]; then
     echo ""
@@ -66,11 +79,10 @@ if [[ ":$PATH:" != *":$CARGO_BIN:"* ]]; then
     echo -e "${GREEN}export PATH=\"\$HOME/.cargo/bin:\$PATH\"${NC}"
     echo ""
     echo -e "${CYAN}Then run:${NC}"
-    echo -e "${GREEN}source ~/.zshrc  # or source ~/.bashrc${NC}"
+    echo -e "${GREEN}source ~/.zshrc${NC}"
     echo ""
 fi
 
-# Verify installation
 if command -v otter &> /dev/null; then
     echo -e "${GREEN}✅ OtterLang installed successfully!${NC}"
     echo ""

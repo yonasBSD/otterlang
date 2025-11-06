@@ -51,16 +51,16 @@
               mold
             ];
 
-            # Use nightly rust source to match the toolchain
+            shellHook = ''
+              export PATH="${rustToolchain}/bin:$PATH"
+            '';
+
             RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
-            # LLVM 15 configuration
             LLVM_SYS_150_PREFIX = "${llvm_15}";
-            # Linux-specific library paths (Nix handles macOS library paths automatically via buildInputs)
             LD_LIBRARY_PATH = lib.optionalString (hasInfix "linux" system) "${llvm_15}/lib:${llvm_15_libs}/lib";
             LIBRARY_PATH = lib.optionalString (hasInfix "linux" system) "${llvm_15}/lib:${llvm_15_libs}/lib";
 
-            # Rust compilation flags
             RUSTFLAGS =
               "-Zshare-generics=y" + lib.optionalString (hasInfix "linux" system) " -Clink-arg=-fuse-ld=mold";
 

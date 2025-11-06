@@ -234,7 +234,6 @@ otterlang profile memory program.otter # Profile memory
 - `examples/basic/struct_demo.otter` - Struct usage
 - `examples/basic/advanced_pipeline.otter` - Complex computation
 - `examples/basic/task_benchmark.otter` - Task benchmarks
-- `examples/basic/arithmetic.otter` - Arithmetic operations
 - `examples/basic/fibonacci.otter` - Fibonacci sequence
 - `examples/basic/pythonic_demo.otter` - Pythonic style
 - `examples/basic/multiline_test.otter` - Multi-line strings

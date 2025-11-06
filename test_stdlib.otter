@@ -1,9 +1,0 @@
-use otter:fmt
-use otter:math
-
-fn main:
-    fmt.println("Testing stdlib...")
-    let x = math.sin(1.0)
-    let y = math.cos(1.0)
-    fmt.println("Math functions work!")
-    fmt.println("Stdlib test completed!")
