@@ -41,6 +41,7 @@ This roadmap outlines major areas of investment and their intended scope. Items 
   - Local and remote package registry support
   - Lockfile generation and reproducible builds
   - Integration with `otter build` and module system
+  - Project manifest (`Otter.toml`) for package metadata, dependencies, scripts, and targets
 - Documentation and website
   - Official documentation site with search and examples
   - Interactive API reference with live code samples
@@ -77,6 +78,8 @@ This roadmap outlines major areas of investment and their intended scope. Items 
   - `otterpkg init` creates a new project with dependencies
   - `otterpkg add <package>` resolves and installs dependencies
   - `otterpkg build` uses lockfile for reproducible builds
+  - `Otter.toml` is parsed and validated (name, version, deps, scripts, targets)
+  - `otterpkg run <script>` executes scripts defined in `Otter.toml`
 - Documentation
   - Website hosts searchable docs with interactive examples
   - Package registry is browsable and searchable
