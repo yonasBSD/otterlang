@@ -32,7 +32,7 @@
         devShells.default =
           with pkgs;
           let
-            llvmPackages = pkgs.llvmPackages_17;
+            llvmPackages = if pkgs ? llvmPackages_18 then pkgs.llvmPackages_18 else if pkgs ? llvmPackages_17 then pkgs.llvmPackages_17 else pkgs.llvmPackages;
             llvm_bin = llvmPackages.llvm;
             llvm_libs = llvmPackages.libllvm;
             rustToolchain = rust-bin.nightly.latest.default.override {
@@ -58,7 +58,7 @@
 
             RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 
-            LLVM_SYS_170_PREFIX = "${llvmPackages.llvm}";
+            LLVM_SYS_180_PREFIX = if llvmPackages == pkgs.llvmPackages_18 then "${llvmPackages.llvm}" else if llvmPackages == pkgs.llvmPackages_17 then "${llvmPackages.llvm}" else "${llvmPackages.llvm}";
             LD_LIBRARY_PATH = "${llvmPackages.llvm}/lib";
             LIBRARY_PATH = "${llvmPackages.llvm}/lib";
 
