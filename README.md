@@ -1,4 +1,4 @@
-# OtterLang 🦦
+# OtterLang
 
 <p>
     <picture>
@@ -143,11 +143,11 @@ fn main():
 ```
 
 **Key advantages:**
-- ✅ No manual bindings needed
-- ✅ Automatic API extraction via rustdoc (requires Rust nightly)
-- ✅ Memory management handled automatically
-- ✅ Async/await support for Rust Futures
-- ✅ Type checking integrated
+- No manual bindings needed
+- Automatic API extraction via rustdoc (requires Rust nightly)
+- Memory management handled automatically
+- Async/await support for Rust Futures
+- Type checking integrated
 
 See [docs/FFI_TRANSPARENT.md](docs/FFI_TRANSPARENT.md) for details.
 
