@@ -4,12 +4,12 @@ use anyhow::{bail, Context, Result};
 use colored::Colorize;
 
 use crate::ast::nodes::{Expr, Program, Statement};
-use crate::lexer::tokenize;
 use crate::parser::parse;
 use crate::runtime::ffi;
 use crate::runtime::jit::executor::JitExecutor;
 use crate::runtime::symbol_registry::SymbolRegistry;
 use crate::typecheck::TypeChecker;
+use lexer::tokenize;
 
 /// REPL engine that maintains state across evaluations
 pub struct ReplEngine {

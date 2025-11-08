@@ -12,15 +12,15 @@ use crate::cache::{CacheBuildOptions, CacheEntry, CacheManager, CacheMetadata, C
 use crate::codegen::{
     self, build_executable, BuildArtifact, CodegenOptLevel, CodegenOptions, TargetTriple,
 };
-use crate::lexer::{tokenize, LexerError};
 use crate::module::ModuleProcessor;
 use crate::parser::{parse, ParserError};
 use crate::runtime::ffi;
 use crate::typecheck::TypeChecker;
-use crate::utils::errors::{emit_diagnostics, Diagnostic};
-use crate::utils::logger;
-use crate::utils::profiler::{PhaseTiming, Profiler};
 use crate::version::VERSION;
+use lexer::{tokenize, LexerError};
+use utils::errors::{emit_diagnostics, Diagnostic};
+use utils::logger;
+use utils::profiler::{PhaseTiming, Profiler};
 
 #[derive(Parser, Debug)]
 #[command(name = "otter", version = VERSION, about = "🦦 OtterLang compiler CLI - Making programming fun!")]
@@ -595,9 +595,9 @@ fn print_timings(stage: &CompilationStage) {
 
 fn handle_fmt(paths: &[PathBuf]) -> Result<()> {
     use crate::fmt::Formatter;
-    use crate::lexer::tokenize;
     use crate::parser::parse;
     use glob::glob;
+    use lexer::tokenize;
 
     println!("{} Formatting OtterLang files...", "✨".magenta());
 

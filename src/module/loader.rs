@@ -4,9 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::nodes::Program;
-use crate::lexer::tokenize;
 use crate::module::resolver::ModuleResolver;
 use crate::parser::parse;
+use lexer::tokenize;
 
 /// Represents a loaded module with its exports
 #[derive(Debug, Clone)]

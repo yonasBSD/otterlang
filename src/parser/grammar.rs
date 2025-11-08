@@ -5,8 +5,9 @@ use crate::ast::nodes::{
     BinaryOp, Block, ExceptHandler, Expr, FStringPart, Function, Literal, MatchArm, NumberLiteral,
     Param, Pattern, Program, Statement, Type, UnaryOp,
 };
-use crate::lexer::token::{Span, Token, TokenKind};
-use crate::utils::errors::{Diagnostic, DiagnosticSeverity};
+use common::Span;
+use lexer::token::{Token, TokenKind};
+use utils::errors::{Diagnostic, DiagnosticSeverity};
 
 #[derive(Debug, Clone)]
 pub struct ParserError {
@@ -158,7 +159,7 @@ fn parse_fstring(content: String) -> Expr {
                         // Parse the expression content using the full expression parser
                         let trimmed = expr_content.trim();
                         if !trimmed.is_empty() {
-                            match crate::lexer::tokenize(trimmed) {
+                            match lexer::tokenize(trimmed) {
                                 Ok(tokens) => {
                                     // Create a stream from tokens for the parser
                                     use chumsky::Stream;
