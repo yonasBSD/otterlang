@@ -12,14 +12,14 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     
     steps:
       - uses: actions/checkout@v4
       
       - name: Install LLVM 18
-        if: matrix.os == 'ubuntu-latest'
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y llvm-18 llvm-18-dev clang-18 || true
@@ -31,13 +31,84 @@ jobs:
           echo "LIBRARY_PATH=/usr/lib/llvm-18/lib:${LIBRARY_PATH:-}" >> $GITHUB_ENV
       
       - name: Install LLVM 18 (macOS)
-        if: matrix.os == 'macos-latest'
+        if: ${{ matrix.os == 'macos-latest' }}
         run: |
           brew install llvm@18 || brew reinstall llvm@18
           echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
           echo "$(brew --prefix llvm@18)/bin" >> $GITHUB_PATH
         env:
           HOMEBREW_NO_INSTALL_CLEANUP: 1
+      
+      - name: Install LLVM 18 (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $llvmInstalled = $false
+          
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host "Attempting to install LLVM via winget..."
+            winget install --id LLVM.LLVM --version 18.1.0 --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Specific version not found, trying latest LLVM 18..."
+              winget install --id LLVM.LLVM --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+            }
+            if ($LASTEXITCODE -eq 0) {
+              $llvmInstalled = $true
+              Write-Host "LLVM installed successfully via winget"
+            } else {
+              Write-Host "winget installation failed, trying choco..."
+            }
+          }
+          
+          if (-not $llvmInstalled) {
+            if (Get-Command choco -ErrorAction SilentlyContinue) {
+              Write-Host "Attempting to install LLVM via choco..."
+              choco install llvm -y
+              if ($LASTEXITCODE -eq 0) {
+                $llvmInstalled = $true
+                Write-Host "LLVM installed successfully via choco"
+              }
+            }
+          }
+          
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          
+          $llvmPaths = @(
+            "C:\Program Files\LLVM",
+            "C:\Program Files (x86)\LLVM",
+            "${env:ProgramFiles}\LLVM",
+            "${env:ProgramFiles(x86)}\LLVM"
+          )
+          
+          $llvmPath = $null
+          foreach ($path in $llvmPaths) {
+            if (Test-Path $path) {
+              $llvmPath = $path
+              break
+            }
+          }
+          
+          if (-not $llvmPath) {
+            try {
+              $clangPath = (Get-Command clang -ErrorAction Stop).Source
+              $llvmPath = Split-Path (Split-Path $clangPath -Parent) -Parent
+              Write-Host "Found LLVM via clang command: $llvmPath"
+            } catch {
+              Write-Host "Could not find clang in PATH"
+            }
+          }
+          
+          if (-not $llvmPath) {
+            throw "Could not find LLVM installation. Please check installation."
+          }
+          
+          Write-Host "LLVM found at: $llvmPath"
+          "LLVM_SYS_180_PREFIX=$llvmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$llvmPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          
+          $clangVersion = clang --version 2>&1
+          Write-Host "Clang version: $clangVersion"
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
@@ -54,6 +125,21 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+        if: ${{ matrix.os != 'windows-latest' }}
+      
+      - name: Cache Cargo dependencies (Windows)
+        uses: actions/cache@v4
+        if: ${{ matrix.os == 'windows-latest' }}
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       
       - name: Build
         env:
@@ -61,12 +147,28 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           LIBRARY_PATH: ${{ env.LIBRARY_PATH }}
         run: cargo build --verbose
+        if: ${{ matrix.os != 'windows-latest' }}
+      
+      - name: Build (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        env:
+          LLVM_SYS_180_PREFIX: ${{ env.LLVM_SYS_180_PREFIX }}
+        shell: pwsh
+        run: cargo build --verbose
       
       - name: Run tests
         env:
           LLVM_SYS_180_PREFIX: ${{ env.LLVM_SYS_180_PREFIX }}
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           LIBRARY_PATH: ${{ env.LIBRARY_PATH }}
+        run: cargo test --verbose
+        if: ${{ matrix.os != 'windows-latest' }}
+      
+      - name: Run tests (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        env:
+          LLVM_SYS_180_PREFIX: ${{ env.LLVM_SYS_180_PREFIX }}
+        shell: pwsh
         run: cargo test --verbose
       
       - name: Build examples
@@ -76,6 +178,28 @@ jobs:
           LIBRARY_PATH: ${{ env.LIBRARY_PATH }}
         run: |
           cargo build --release
-          for example in examples/*.otter; do
+          find examples -name "*.ot" -type f | while read -r example; do
             cargo run --release -- run "$example" || true
           done
+        if: ${{ matrix.os != 'windows-latest' }}
+      
+      - name: Build examples (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        env:
+          LLVM_SYS_180_PREFIX: ${{ env.LLVM_SYS_180_PREFIX }}
+        shell: pwsh
+        run: |
+          cargo build --release
+          $examples = Get-ChildItem -Path examples -Filter *.ot -Recurse
+          if ($examples.Count -eq 0) {
+            Write-Host "No .ot files found in examples directory"
+            exit 0
+          }
+          foreach ($example in $examples) {
+            Write-Host "Running example: $($example.FullName)"
+            try {
+              cargo run --release -- run $example.FullName
+            } catch {
+              Write-Host "Example $($example.Name) failed, continuing..."
+            }
+          }

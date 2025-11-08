@@ -90,6 +90,29 @@ rustup default nightly
 cargo build --release
 ```
 
+**Windows:**
+```powershell
+# Install LLVM 18 using winget (recommended) or Chocolatey
+winget install --id LLVM.LLVM --version 18.1.0 --silent --accept-package-agreements --accept-source-agreements
+# Or using Chocolatey:
+# choco install llvm -y
+
+# Set environment variables (adjust path if LLVM is installed elsewhere)
+$env:LLVM_SYS_180_PREFIX = "C:\Program Files\LLVM"
+$env:Path = "$env:LLVM_SYS_180_PREFIX\bin;$env:Path"
+
+# Install Rust nightly
+rustup toolchain install nightly
+rustup default nightly
+
+# Build
+cargo build --release
+```
+
+**Note for Windows:** If LLVM is installed in a different location, update `LLVM_SYS_180_PREFIX` accordingly. Common locations:
+- `C:\Program Files\LLVM`
+- `C:\Program Files (x86)\LLVM`
+
 ## Language Features
 
 ### Syntax
@@ -282,7 +305,6 @@ The test runner will discover functions prefixed with `test_` and report pass/fa
 
 - Type inference is limited (explicit types recommended)
 - Module system has some limitations
-- Windows support is experimental
 - Requires LLVM 18 and Rust nightly (for FFI features)
 
 ## Contributing
