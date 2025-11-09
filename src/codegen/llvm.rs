@@ -1562,6 +1562,10 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                 // Struct definitions are handled at the module level, not in function bodies
                 Ok(())
             }
+            Statement::Enum { .. } => {
+                // Enums are compile-time only constructs
+                Ok(())
+            }
             Statement::TypeAlias { .. } => {
                 // Type aliases are handled at the module level, not in function bodies
                 Ok(())

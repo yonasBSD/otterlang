@@ -432,7 +432,7 @@ impl TypeChecker {
     ) -> Result<Option<TypeInfo>> {
         if let Expr::Member { object, field } = func {
             if let Expr::Identifier(enum_name) = object.as_ref() {
-                if let Some(definition) = self.context.get_enum(enum_name) {
+                if let Some(definition) = self.context.get_enum(enum_name).cloned() {
                     let variant = match definition
                         .variants
                         .iter()
@@ -484,7 +484,7 @@ impl TypeChecker {
                         self.infer_enum_generics_from_type(
                             field_ty,
                             actual_ty,
-                            definition,
+                            &definition,
                             &mut inferred,
                         );
                     }
