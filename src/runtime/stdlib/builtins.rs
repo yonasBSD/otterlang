@@ -202,12 +202,18 @@ pub unsafe extern "C" fn otter_builtin_cap_string(s: *const c_char) -> i64 {
 // ============================================================================
 
 #[no_mangle]
-pub unsafe extern "C" fn otter_builtin_str_contains(s: *const c_char, substring: *const c_char) -> bool {
+pub unsafe extern "C" fn otter_builtin_str_contains(
+    s: *const c_char,
+    substring: *const c_char,
+) -> bool {
     if s.is_null() || substring.is_null() {
         return false;
     }
     unsafe {
-        if let (Ok(str_ref), Ok(substr_ref)) = (CStr::from_ptr(s).to_str(), CStr::from_ptr(substring).to_str()) {
+        if let (Ok(str_ref), Ok(substr_ref)) = (
+            CStr::from_ptr(s).to_str(),
+            CStr::from_ptr(substring).to_str(),
+        ) {
             str_ref.contains(substr_ref)
         } else {
             false

@@ -2,8 +2,8 @@ use chumsky::Stream;
 use chumsky::prelude::*;
 
 use ast::nodes::{
-    BinaryOp, Block, ExceptHandler, Expr, FStringPart, Function, Literal, MatchArm, NumberLiteral,
-    Param, Pattern, Program, Statement, Type, UnaryOp, UseImport,
+    BinaryOp, Block, EnumVariant, ExceptHandler, Expr, FStringPart, Function, Literal, MatchArm,
+    NumberLiteral, Param, Pattern, Program, Statement, Type, UnaryOp, UseImport,
 };
 
 use common::Span;
@@ -119,21 +119,7 @@ fn type_parser() -> impl Parser<TokenKind, Type, Error = Simple<TokenKind>> {
                     .or_not(),
             )
             .map(|(base, args)| match args {
-                Some(args) => {
-                    if base.eq_ignore_ascii_case("option") && args.len() == 1 {
-                        Type::Option(Box::new(args.into_iter().next().unwrap()))
-                    } else if base.eq_ignore_ascii_case("result") && args.len() == 2 {
-                        let mut iter = args.into_iter();
-                        let ok = iter.next().unwrap();
-                        let err = iter.next().unwrap();
-                        Type::Result {
-                            ok: Box::new(ok),
-                            err: Box::new(err),
-                        }
-                    } else {
-                        Type::Generic { base, args }
-                    }
-                }
+                Some(args) => Type::Generic { base, args },
                 None => Type::Simple(base),
             })
     })
@@ -623,6 +609,26 @@ fn pattern_parser(
 
         let identifier_pattern = identifier_parser().map(Pattern::Identifier);
 
+        let enum_variant_pattern = identifier_parser()
+            .then_ignore(just(TokenKind::Dot))
+            .then(identifier_parser())
+            .then(
+                just(TokenKind::LParen)
+                    .ignore_then(
+                        pattern
+                            .clone()
+                            .separated_by(just(TokenKind::Comma))
+                            .allow_trailing(),
+                    )
+                    .then_ignore(just(TokenKind::RParen))
+                    .or_not(),
+            )
+            .map(|((enum_name, variant), fields)| Pattern::EnumVariant {
+                enum_name,
+                variant,
+                fields: fields.unwrap_or_default(),
+            });
+
         let struct_pattern = identifier_parser()
             .then(
                 just(TokenKind::LBrace)
@@ -659,6 +665,7 @@ fn pattern_parser(
         choice((
             wildcard,
             literal_pattern,
+            enum_variant_pattern,
             struct_pattern,
             array_pattern,
             identifier_pattern,
@@ -994,6 +1001,25 @@ fn program_parser() -> impl Parser<TokenKind, Program, Error = Simple<TokenKind>
         .or_not()
         .map(|params| params.unwrap_or_default());
 
+    let enum_variant = identifier_parser()
+        .then(
+            just(TokenKind::Colon)
+                .ignore_then(
+                    type_parser()
+                        .separated_by(just(TokenKind::Comma))
+                        .allow_trailing()
+                        .delimited_by(just(TokenKind::LParen), just(TokenKind::RParen)),
+                )
+                .or_not(),
+        )
+        .then_ignore(newline.clone().or_not())
+        .map(|(name, fields)| EnumVariant::new(name, fields.unwrap_or_default()));
+
+    let enum_body = enum_variant
+        .repeated()
+        .at_least(1)
+        .then_ignore(newline.clone().or_not());
+
     let struct_field = identifier_parser()
         .then_ignore(just(TokenKind::Colon))
         .then(type_parser())
@@ -1086,6 +1112,24 @@ fn program_parser() -> impl Parser<TokenKind, Program, Error = Simple<TokenKind>
             },
         );
 
+    let enum_def = pub_keyword
+        .clone()
+        .then(just(TokenKind::Enum))
+        .then(identifier_parser())
+        .then(struct_generics.clone())
+        .then_ignore(just(TokenKind::Colon))
+        .then_ignore(newline.clone())
+        .then(enum_body.delimited_by(just(TokenKind::Indent), just(TokenKind::Dedent)))
+        .then_ignore(newline.clone().or_not())
+        .map(
+            |((((pub_kw, _), name), generics), variants)| Statement::Enum {
+                name,
+                variants,
+                public: pub_kw.is_some(),
+                generics,
+            },
+        );
+
     // Type alias: type Name<T> = Type
     let type_alias_generics = identifier_parser()
         .separated_by(just(TokenKind::Comma))
@@ -1114,7 +1158,7 @@ fn program_parser() -> impl Parser<TokenKind, Program, Error = Simple<TokenKind>
     newline
         .clone()
         .or_not()
-        .ignore_then(choice((struct_def, type_alias_def, function, statement)).repeated())
+        .ignore_then(choice((struct_def, enum_def, type_alias_def, function, statement)).repeated())
         .then_ignore(newline.repeated().or_not())
         .then_ignore(just(TokenKind::Eof))
         .map(Program::new)

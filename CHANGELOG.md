@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `enum` keyword with parser, formatter, and type checker support for user-defined tagged unions
+- `otter.core` standard library module that provides `Option` and `Result` as normal enums
+- `examples/basic/enum_demo.ot` showcasing enum construction and pattern matching
+
 ## [0.1.0] - 2024-12-01
 
 ### Added

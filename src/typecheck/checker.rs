@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::collections::HashMap;
 
 use crate::runtime::symbol_registry::{FfiType, SymbolRegistry};
-use crate::typecheck::types::{TypeContext, TypeError, TypeInfo};
+use crate::typecheck::types::{EnumDefinition, TypeContext, TypeError, TypeInfo};
 use ast::nodes::{Block, Expr, Function, Literal, Program, Statement};
 use language::LanguageFeatureFlags;
 
@@ -137,53 +137,8 @@ impl TypeChecker {
 
     /// Type check a program
     pub fn check_program(&mut self, program: &Program) -> Result<()> {
-        // First pass: collect struct definitions and type aliases
-        for statement in &program.statements {
-            match statement {
-                Statement::Struct {
-                    name,
-                    fields,
-                    methods,
-                    generics,
-                    ..
-                } => {
-                    let mut field_types = HashMap::new();
-                    for (field_name, field_ty) in fields {
-                        let ty = TypeInfo::from(field_ty);
-                        field_types.insert(field_name.clone(), ty);
-                    }
-
-                    // Push generic parameters to context
-                    for generic in generics {
-                        self.context.push_generic(generic.clone());
-                    }
-
-                    self.context.define_struct(name.clone(), field_types);
-
-                    // Register methods as functions with struct name prefix
-                    for method in methods {
-                        let method_name = format!("{}.{}", name, method.name);
-                        let sig = self.infer_function_signature(method);
-                        self.context.insert_function(method_name.clone(), sig);
-                    }
-
-                    // Pop generic parameters
-                    for _ in generics {
-                        self.context.pop_generic();
-                    }
-                }
-                Statement::TypeAlias {
-                    name,
-                    target,
-                    public,
-                    ..
-                } => {
-                    let ty = TypeInfo::from(target);
-                    self.context.define_type_alias(name.clone(), ty, *public);
-                }
-                _ => {}
-            }
-        }
+        // First pass: collect struct definitions, enums, and type aliases
+        self.register_type_definitions(&program.statements);
 
         // Second pass: collect function signatures
         for statement in &program.statements {
@@ -203,7 +158,10 @@ impl TypeChecker {
                     // Top-level let and expressions are allowed
                     self.check_statement(statement)?;
                 }
-                Statement::Struct { .. } | Statement::TypeAlias { .. } | Statement::Use { .. } => {
+                Statement::Struct { .. }
+                | Statement::Enum { .. }
+                | Statement::TypeAlias { .. }
+                | Statement::Use { .. } => {
                     // These are handled in earlier passes
                 }
                 _ => {
@@ -230,7 +188,10 @@ impl TypeChecker {
         let mut seen_default = false;
 
         for param in &function.params {
-            let explicit_type = param.ty.as_ref().map(TypeInfo::from);
+            let explicit_type = param
+                .ty
+                .as_ref()
+                .map(|ty| self.context.type_from_annotation(ty));
             let resolved_type = if let Some(ty) = &explicit_type {
                 if let TypeInfo::Generic { base, args } = ty {
                     if args.is_empty() {
@@ -287,21 +248,7 @@ impl TypeChecker {
         }
 
         let return_type = if let Some(ty) = &function.ret_ty {
-            let type_info = TypeInfo::from(ty);
-            // Resolve type aliases
-            if let TypeInfo::Generic { base, args } = &type_info {
-                if args.is_empty() {
-                    if let Some(aliased_type) = self.context.resolve_type_alias(base) {
-                        aliased_type.clone()
-                    } else {
-                        type_info
-                    }
-                } else {
-                    type_info
-                }
-            } else {
-                type_info
-            }
+            self.context.type_from_annotation(ty)
         } else {
             TypeInfo::Unknown
         };
@@ -313,6 +260,69 @@ impl TypeChecker {
         }
     }
 
+    pub fn register_module_definitions(&mut self, program: &Program) {
+        self.register_type_definitions(&program.statements);
+    }
+
+    fn register_type_definitions(&mut self, statements: &[Statement]) {
+        for statement in statements {
+            match statement {
+                Statement::Struct {
+                    name,
+                    fields,
+                    methods,
+                    generics,
+                    ..
+                } => {
+                    let mut field_types = HashMap::new();
+                    for (field_name, field_ty) in fields {
+                        let ty = self.context.type_from_annotation(field_ty);
+                        field_types.insert(field_name.clone(), ty);
+                    }
+
+                    for generic in generics {
+                        self.context.push_generic(generic.clone());
+                    }
+
+                    self.context.define_struct(name.clone(), field_types);
+
+                    for method in methods {
+                        let method_name = format!("{}.{}", name, method.name);
+                        let sig = self.infer_function_signature(method);
+                        self.context.insert_function(method_name.clone(), sig);
+                    }
+
+                    for _ in generics {
+                        self.context.pop_generic();
+                    }
+                }
+                Statement::TypeAlias {
+                    name,
+                    target,
+                    public,
+                    ..
+                } => {
+                    let ty = self.context.type_from_annotation(target);
+                    self.context.define_type_alias(name.clone(), ty, *public);
+                }
+                Statement::Enum {
+                    name,
+                    variants,
+                    generics,
+                    ..
+                } => {
+                    let definition = EnumDefinition {
+                        name: name.clone(),
+                        generics: generics.clone(),
+                        variants: variants.clone(),
+                    };
+                    self.context.define_enum(definition);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Type check a function
     fn check_function(&mut self, function: &Function) -> Result<()> {
         let mut fn_context = TypeContext::with_features(self.features.clone());
@@ -320,7 +330,7 @@ impl TypeChecker {
         // Add function parameters to context
         for param in &function.params {
             let param_type = if let Some(ty) = &param.ty {
-                TypeInfo::from(ty)
+                self.context.type_from_annotation(ty)
             } else {
                 TypeInfo::Unknown
             };
@@ -331,6 +341,10 @@ impl TypeChecker {
         for (name, sig) in &self.context.functions {
             fn_context.functions.insert(name.clone(), sig.clone());
         }
+
+        fn_context.structs = self.context.structs.clone();
+        fn_context.type_aliases = self.context.type_aliases.clone();
+        fn_context.enums = self.context.enums.clone();
 
         // Type check function body
         let old_context = std::mem::replace(&mut self.context, fn_context);
@@ -399,13 +413,232 @@ impl TypeChecker {
                     self.extract_generic_params(arg, params);
                 }
             }
-            ast::nodes::Type::Option(inner) => {
-                self.extract_generic_params(inner, params);
+        }
+    }
+
+    fn try_eval_enum_constructor(
+        &mut self,
+        func: &Expr,
+        args: &[Expr],
+    ) -> Result<Option<TypeInfo>> {
+        if let Expr::Member { object, field } = func {
+            if let Expr::Identifier(enum_name) = object.as_ref() {
+                if let Some(definition) = self.context.get_enum(enum_name) {
+                    let variant = match definition
+                        .variants
+                        .iter()
+                        .find(|variant| variant.name == *field)
+                    {
+                        Some(v) => v,
+                        None => {
+                            self.errors.push(TypeError::new(format!(
+                                "enum '{}' has no variant '{}'",
+                                enum_name, field
+                            )));
+                            return Ok(Some(TypeInfo::Error));
+                        }
+                    };
+
+                    let expected_len = variant.fields.len();
+                    if expected_len != args.len() {
+                        self.errors.push(TypeError::new(format!(
+                            "enum variant '{}.{}' expects {} argument(s), got {}",
+                            enum_name,
+                            field,
+                            expected_len,
+                            args.len()
+                        )));
+                    }
+
+                    let mut arg_types = Vec::new();
+                    for arg in args {
+                        arg_types.push(self.infer_expr_type(arg)?);
+                    }
+
+                    for (field_ty, actual_ty) in variant.fields.iter().zip(arg_types.iter()) {
+                        let expected_type = self.context.type_from_annotation(field_ty);
+                        if !self.type_contains_enum_generic(field_ty, &definition.generics)
+                            && !actual_ty.is_compatible_with(&expected_type)
+                        {
+                            self.errors.push(TypeError::new(format!(
+                                "argument for '{}.{}' expects type {}, got {}",
+                                enum_name,
+                                field,
+                                expected_type.display_name(),
+                                actual_ty.display_name()
+                            )));
+                        }
+                    }
+
+                    let mut inferred = HashMap::new();
+                    for (field_ty, actual_ty) in variant.fields.iter().zip(arg_types.iter()) {
+                        self.infer_enum_generics_from_type(
+                            field_ty,
+                            actual_ty,
+                            definition,
+                            &mut inferred,
+                        );
+                    }
+
+                    let resolved_args = definition
+                        .generics
+                        .iter()
+                        .map(|name| inferred.get(name).cloned().unwrap_or(TypeInfo::Unknown))
+                        .collect::<Vec<_>>();
+
+                    if let Some(enum_type) = self.context.build_enum_type(enum_name, resolved_args)
+                    {
+                        return Ok(Some(enum_type));
+                    }
+
+                    return Ok(Some(TypeInfo::Error));
+                }
             }
-            ast::nodes::Type::Result { ok, err } => {
-                self.extract_generic_params(ok, params);
-                self.extract_generic_params(err, params);
+        }
+        Ok(None)
+    }
+
+    fn type_contains_enum_generic(&self, ty: &ast::nodes::Type, generics: &[String]) -> bool {
+        match ty {
+            ast::nodes::Type::Simple(name) => generics.contains(name),
+            ast::nodes::Type::Generic { base, args } => {
+                generics.contains(base)
+                    || args
+                        .iter()
+                        .any(|arg| self.type_contains_enum_generic(arg, generics))
             }
+        }
+    }
+
+    fn infer_enum_generics_from_type(
+        &mut self,
+        expected: &ast::nodes::Type,
+        actual: &TypeInfo,
+        definition: &EnumDefinition,
+        inferred: &mut HashMap<String, TypeInfo>,
+    ) {
+        match expected {
+            ast::nodes::Type::Simple(name) => {
+                if definition.generics.contains(name) {
+                    inferred
+                        .entry(name.clone())
+                        .or_insert_with(|| actual.clone());
+                }
+            }
+            ast::nodes::Type::Generic { base, args } => {
+                if definition.generics.contains(base) && args.is_empty() {
+                    inferred
+                        .entry(base.clone())
+                        .or_insert_with(|| actual.clone());
+                } else if base.eq_ignore_ascii_case("List") {
+                    if let TypeInfo::List(inner) = actual {
+                        if let Some(sub_ty) = args.get(0) {
+                            self.infer_enum_generics_from_type(sub_ty, inner, definition, inferred);
+                        }
+                    }
+                } else if base.eq_ignore_ascii_case("Dict") {
+                    if let TypeInfo::Dict { key, value } = actual {
+                        if let Some(key_ty) = args.get(0) {
+                            self.infer_enum_generics_from_type(key_ty, key, definition, inferred);
+                        }
+                        if let Some(val_ty) = args.get(1) {
+                            self.infer_enum_generics_from_type(val_ty, value, definition, inferred);
+                        }
+                    }
+                } else {
+                    match actual {
+                        TypeInfo::Generic {
+                            base: actual_base,
+                            args: actual_args,
+                        } if actual_base == base => {
+                            for (expected_arg, actual_arg) in args.iter().zip(actual_args.iter()) {
+                                self.infer_enum_generics_from_type(
+                                    expected_arg,
+                                    actual_arg,
+                                    definition,
+                                    inferred,
+                                );
+                            }
+                        }
+                        TypeInfo::Enum {
+                            name,
+                            args: actual_args,
+                            ..
+                        } if name == base => {
+                            for (expected_arg, actual_arg) in args.iter().zip(actual_args.iter()) {
+                                self.infer_enum_generics_from_type(
+                                    expected_arg,
+                                    actual_arg,
+                                    definition,
+                                    inferred,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn validate_pattern_against_type(&mut self, pattern: &ast::nodes::Pattern, ty: &TypeInfo) {
+        match pattern {
+            ast::nodes::Pattern::EnumVariant {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                if let Some(definition) = self.context.get_enum(enum_name) {
+                    if let Some(declared_variant) = definition
+                        .variants
+                        .iter()
+                        .find(|decl| decl.name == *variant)
+                    {
+                        if let TypeInfo::Enum { name, .. } = ty {
+                            if name != enum_name {
+                                self.errors.push(TypeError::new(format!(
+                                    "pattern '{}' does not match enum type {}",
+                                    enum_name, name
+                                )));
+                            }
+                        }
+                        if declared_variant.fields.len() != fields.len() {
+                            self.errors.push(TypeError::new(format!(
+                                "enum variant '{}.{}' destructures {} value(s), but pattern provides {}",
+                                enum_name,
+                                variant,
+                                declared_variant.fields.len(),
+                                fields.len()
+                            )));
+                        }
+                    } else {
+                        self.errors.push(TypeError::new(format!(
+                            "enum '{}' has no variant '{}'",
+                            enum_name, variant
+                        )));
+                    }
+                } else {
+                    self.errors.push(TypeError::new(format!(
+                        "unknown enum '{}' in pattern",
+                        enum_name
+                    )));
+                }
+            }
+            ast::nodes::Pattern::Struct { fields, .. } => {
+                for (_, nested) in fields {
+                    if let Some(p) = nested {
+                        self.validate_pattern_against_type(p, ty);
+                    }
+                }
+            }
+            ast::nodes::Pattern::Array { patterns, .. } => {
+                for p in patterns {
+                    self.validate_pattern_against_type(p, ty);
+                }
+            }
+            ast::nodes::Pattern::Wildcard
+            | ast::nodes::Pattern::Literal(_)
+            | ast::nodes::Pattern::Identifier(_) => {}
         }
     }
 
@@ -537,6 +770,9 @@ impl TypeChecker {
             Statement::Struct { .. } => {
                 // Struct definitions are handled at the module level
             }
+            Statement::Enum { .. } => {
+                // Enums are handled during the module pass
+            }
             Statement::TypeAlias { .. } => {
                 // Type aliases are handled at the module level
             }
@@ -556,7 +792,7 @@ impl TypeChecker {
                 for handler in handlers {
                     if let Some(exception_type) = &handler.exception {
                         // Convert AST type to TypeInfo
-                        let handler_ty = TypeInfo::from(exception_type);
+                        let handler_ty = self.context.type_from_annotation(exception_type);
                         // Validate that handler type is compatible with Error
                         if !handler_ty.is_compatible_with(&TypeInfo::Error) {
                             self.errors.push(TypeError::new(format!(
@@ -777,6 +1013,9 @@ impl TypeChecker {
                     }
                 }
                 Expr::Call { func, args } => {
+                    if let Some(enum_type) = self.try_eval_enum_constructor(func, args)? {
+                        return Ok(enum_type);
+                    }
                     let func_type = match func.as_ref() {
                         Expr::Identifier(name) => {
                             self.context.get_function(name).cloned().ok_or_else(|| {
@@ -1058,7 +1297,7 @@ impl TypeChecker {
                     let mut param_defaults = Vec::new();
                     for param in params {
                         let param_type = if let Some(ty) = &param.ty {
-                            TypeInfo::from(ty)
+                            self.context.type_from_annotation(ty)
                         } else {
                             TypeInfo::Unknown
                         };
@@ -1077,7 +1316,7 @@ impl TypeChecker {
                     }
 
                     let return_type = if let Some(ty) = ret_ty {
-                        TypeInfo::from(ty)
+                        self.context.type_from_annotation(ty)
                     } else {
                         // Try to infer return type from body
                         // For now, assume unit if no return statement
@@ -1305,7 +1544,7 @@ impl TypeChecker {
                     })
                 }
                 Expr::Match { value, arms } => {
-                    let _value_type = self.infer_expr_type(value)?;
+                    let value_type = self.infer_expr_type(value)?;
 
                     if arms.is_empty() {
                         self.errors.push(
@@ -1322,6 +1561,8 @@ impl TypeChecker {
                     for arm in arms {
                         // Check pattern matches value type (simplified - just check it's valid)
                         // TODO: More sophisticated pattern matching type checking
+
+                        self.validate_pattern_against_type(&arm.pattern, &value_type);
 
                         // Check guard if present
                         if let Some(guard) = &arm.guard {

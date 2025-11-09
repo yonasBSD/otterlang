@@ -163,6 +163,41 @@ def main():
         print(str(i))
 ```
 
+### Enums
+
+Use `enum` to define tagged unions with typed payloads. Variants accept tuple-style data, and you can destructure them with the existing `match` expression:
+
+```otter
+pub enum Option<T>:
+    Some: (T)
+    None
+
+use otter.core
+
+def divide(x: float, y: float) -> Result<float, str>:
+    if y == 0:
+        return Result.Err("division by zero")
+    return Result.Ok(x / y)
+
+def main():
+    let outcome = divide(10.0, 2.0)
+    let value = match outcome:
+        case Result.Ok(val):
+            val
+        case Result.Err(msg):
+            print("error: " + msg)
+            0.0
+
+    let wrapped = Option.Some(value)
+    match wrapped:
+        case Option.Some(v):
+            print("value: " + str(v))
+        case Option.None:
+            print("no value")
+```
+
+The standard library now ships `Option` and `Result` as regular enums in `otter.core`, so you can `use otter.core` to pull them in instead of relying on hard-coded compiler types.
+
 ### Transparent Rust FFI
 
 Automatically use any Rust crate without manual configuration:

@@ -128,6 +128,11 @@ impl ModuleLoader {
                         exports.add_type(name.clone());
                     }
                 }
+                ast::nodes::Statement::Enum { name, public, .. } => {
+                    if *public {
+                        exports.add_type(name.clone());
+                    }
+                }
                 ast::nodes::Statement::TypeAlias { name, public, .. } => {
                     if *public {
                         exports.add_type(name.clone());

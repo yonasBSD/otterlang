@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{Module, ModuleLoader, ModulePath, ModuleResolver};
 use ast::nodes::{Program, Statement};
+const DEFAULT_MODULES: &[&str] = &["otter.core"];
 
 /// Processes module imports and loads dependencies
 pub struct ModuleProcessor {
@@ -30,6 +31,8 @@ impl ModuleProcessor {
         let mut dependencies = Vec::new();
         let mut rust_imports = Vec::new();
 
+        self.load_default_modules(&mut dependencies)?;
+
         for statement in &program.statements {
             if let Statement::Use { imports } = statement {
                 for import in imports {
@@ -53,11 +56,7 @@ impl ModuleProcessor {
                                 let resolver = self.loader.resolver();
                                 resolver.resolve(module)?
                             };
-                            self.load_local_dependency(
-                                &source_dir,
-                                resolved,
-                                &mut dependencies,
-                            )?;
+                            self.load_local_dependency(&source_dir, resolved, &mut dependencies)?;
                         }
                         ModulePath::Unqualified(_) => {
                             let source_dir = self.source_dir.clone();
@@ -96,6 +95,8 @@ impl ModuleProcessor {
         };
 
         let mut dependencies = Vec::new();
+
+        self.load_default_modules(&mut dependencies)?;
 
         for statement in &module_statements {
             if let Statement::Use { imports } = statement {
@@ -156,15 +157,43 @@ impl ModuleProcessor {
         self.loaded_modules.get(path)
     }
 
+    /// Iterate over all loaded modules
+    pub fn modules(&self) -> impl Iterator<Item = &Module> {
+        self.loaded_modules.values()
+    }
+
     /// Set stdlib directory
     pub fn set_stdlib_dir(&mut self, dir: PathBuf) {
         let normalized = dir.canonicalize().unwrap_or(dir);
-        self.loader.resolver_mut().set_stdlib_dir(normalized.clone());
+        self.loader
+            .resolver_mut()
+            .set_stdlib_dir(normalized.clone());
         self.stdlib_dir = Some(normalized);
     }
 }
 
 impl ModuleProcessor {
+    fn load_default_modules(&mut self, dependencies: &mut Vec<PathBuf>) -> Result<()> {
+        if self.stdlib_dir.is_none() {
+            return Ok(());
+        }
+
+        for module in DEFAULT_MODULES {
+            let resolved = {
+                let resolver = self.loader.resolver();
+                resolver.resolve(module)?
+            };
+
+            if self.is_stdlib_path(&resolved) {
+                self.load_stdlib_dependency(resolved, dependencies)?;
+            } else {
+                self.load_local_dependency(Path::new("."), resolved, dependencies)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn load_stdlib_dependency(
         &mut self,
         resolved: PathBuf,
@@ -202,8 +231,7 @@ impl ModuleProcessor {
     }
 
     fn is_stdlib_path(&self, path: &Path) -> bool {
-        self
-            .stdlib_dir
+        self.stdlib_dir
             .as_ref()
             .map(|dir| path.starts_with(dir))
             .unwrap_or(false)

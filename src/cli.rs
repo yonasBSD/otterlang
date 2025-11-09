@@ -303,6 +303,10 @@ fn compile_pipeline(
     let mut type_checker =
         TypeChecker::with_language_features(settings.language_features().clone())
             .with_registry(crate::runtime::symbol_registry::SymbolRegistry::global());
+
+    for module in module_processor.modules() {
+        type_checker.register_module_definitions(&module.program);
+    }
     let type_check_result =
         profiler.record_phase("Type Checking", || type_checker.check_program(&program));
 

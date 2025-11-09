@@ -39,7 +39,8 @@ pub enum TokenKind {
     Finally,
     Raise,
     Struct,
-    Class,  // Pythonic alias for struct
+    Class, // Pythonic alias for struct
+    Enum,
 
     // Identifiers
     Identifier(String),
@@ -134,6 +135,7 @@ impl Hash for TokenKind {
             TokenKind::Raise => 31u16.hash(state),
             TokenKind::Struct => 32u16.hash(state),
             TokenKind::Class => 32u16.hash(state), // Same as Struct (alias)
+            TokenKind::Enum => 33u16.hash(state),
 
             // Identifiers
             TokenKind::Identifier(name) => {
@@ -250,6 +252,7 @@ impl TokenKind {
             TokenKind::Raise => "raise",
             TokenKind::Struct => "struct",
             TokenKind::Class => "class",
+            TokenKind::Enum => "enum",
 
             // Identifiers
             TokenKind::Identifier(_) => "identifier",
@@ -370,6 +373,7 @@ impl Token {
                 | TokenKind::Raise
                 | TokenKind::Struct
                 | TokenKind::Class
+                | TokenKind::Enum
         )
     }
 

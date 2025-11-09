@@ -42,7 +42,7 @@
         },
         {
           "name": "keyword.other",
-          "match": "\\b(fn|let|pub|struct|type|use|as|in|and|or|not|true|false|nil)\\b"
+          "match": "\\b(fn|let|pub|struct|enum|type|use|as|in|and|or|not|true|false|nil)\\b"
         }
       ]
     },
@@ -128,4 +128,3 @@
     }
   }
 }
-

@@ -1,0 +1,27 @@
+use otter.core
+
+def divide(x: float, y: float) -> Result<float, str>:
+    if y == 0:
+        return Result.Err("Division by zero")
+    return Result.Ok(x / y)
+
+def describe(value: Option<float>) -> str:
+    let message = match value:
+        case Option.Some(result):
+            "Result: " + str(result)
+        case Option.None:
+            "No value provided"
+    return message
+
+def main():
+    let sample = divide(10.0, 2.0)
+    let status = match sample:
+        case Result.Ok(val):
+            "Ok: " + str(val)
+        case Result.Err(msg):
+            "Error: " + msg
+    print(status)
+
+    let maybe = Option.Some(42.0)
+    print(describe(maybe))
+    print(describe(Option.None))

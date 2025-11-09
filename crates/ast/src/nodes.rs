@@ -72,8 +72,6 @@ impl Function {
 pub enum Type {
     Simple(String),
     Generic { base: String, args: Vec<Type> },
-    Option(Box<Type>),
-    Result { ok: Box<Type>, err: Box<Type> },
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +113,21 @@ impl UseImport {
         Self {
             module: module.into(),
             alias,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub fields: Vec<Type>,
+}
+
+impl EnumVariant {
+    pub fn new(name: impl Into<String>, fields: Vec<Type>) -> Self {
+        Self {
+            name: name.into(),
+            fields,
         }
     }
 }
@@ -164,6 +177,12 @@ pub enum Statement {
         public: bool,
         generics: Vec<String>, // Generic type parameters
     },
+    Enum {
+        name: String,
+        variants: Vec<EnumVariant>,
+        public: bool,
+        generics: Vec<String>,
+    },
     TypeAlias {
         name: String,
         target: Type,
@@ -205,6 +224,7 @@ impl Statement {
             | Statement::Expr(_)
             | Statement::Use { .. }
             | Statement::Struct { .. }
+            | Statement::Enum { .. }
             | Statement::TypeAlias { .. }
             | Statement::Raise(_) => 1,
 
@@ -396,6 +416,12 @@ pub enum Pattern {
     Literal(Literal),
     /// Identifier pattern (binds to variable)
     Identifier(String),
+    /// Enum variant pattern (Enum.Variant(...))
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        fields: Vec<Pattern>,
+    },
     /// Tuple/struct pattern (Point { x, y })
     Struct {
         name: String,

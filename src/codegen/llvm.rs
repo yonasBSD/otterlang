@@ -3,19 +3,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow, bail};
-use inkwell::AddressSpace;
-use inkwell::OptimizationLevel;
+use anyhow::{anyhow, bail, Context, Result};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context as LlvmContext;
 use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, FunctionType};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
+use inkwell::AddressSpace;
+use inkwell::OptimizationLevel;
 
 use crate::codegen::target::TargetTriple;
 use crate::runtime::ffi::register_dynamic_exports;
@@ -265,12 +267,8 @@ pub fn build_executable(
     let llvm_triple = inkwell::targets::TargetTriple::create(&triple_str);
     compiler.module.set_triple(&llvm_triple);
 
-    let target = Target::from_triple(&llvm_triple).map_err(|e| {
-        anyhow!(
-            "failed to create target from triple {}: {e}",
-            triple_str
-        )
-    })?;
+    let target = Target::from_triple(&llvm_triple)
+        .map_err(|e| anyhow!("failed to create target from triple {}: {e}", triple_str))?;
 
     let optimization: OptimizationLevel = options.opt_level.into();
     let reloc_mode = if runtime_triple.is_wasm() {
@@ -384,13 +382,13 @@ pub fn build_executable(
         cc.arg("-flto");
         // Note: clang doesn't support -flto=O2/O3, use -O flags instead
         match options.opt_level {
-            CodegenOptLevel::None => {},
+            CodegenOptLevel::None => {}
             CodegenOptLevel::Default => {
                 cc.arg("-O2");
-            },
+            }
             CodegenOptLevel::Aggressive => {
                 cc.arg("-O3");
-            },
+            }
         }
     }
 
@@ -474,12 +472,8 @@ pub fn build_shared_library(
     let llvm_triple = inkwell::targets::TargetTriple::create(&triple_str);
     compiler.module.set_triple(&llvm_triple);
 
-    let target = Target::from_triple(&llvm_triple).map_err(|e| {
-        anyhow!(
-            "failed to create target from triple {}: {e}",
-            triple_str
-        )
-    })?;
+    let target = Target::from_triple(&llvm_triple)
+        .map_err(|e| anyhow!("failed to create target from triple {}: {e}", triple_str))?;
 
     let optimization: OptimizationLevel = options.opt_level.into();
     let reloc_mode = if runtime_triple.is_wasm() {
@@ -594,9 +588,7 @@ pub fn build_shared_library(
             cc.arg("-fPIC");
         }
         cc.arg(linker_target_flag).arg(&triple_str);
-        cc.arg("-o")
-            .arg(&lib_path)
-            .arg(&object_path);
+        cc.arg("-o").arg(&lib_path).arg(&object_path);
         if let Some(ref rt_o) = runtime_o {
             cc.arg(rt_o);
         }
@@ -611,13 +603,13 @@ pub fn build_shared_library(
         cc.arg("-flto");
         // Note: clang doesn't support -flto=O2/O3, use -O flags instead
         match options.opt_level {
-            CodegenOptLevel::None => {},
+            CodegenOptLevel::None => {}
             CodegenOptLevel::Default => {
                 cc.arg("-O2");
-            },
+            }
             CodegenOptLevel::Aggressive => {
                 cc.arg("-O3");
-            },
+            }
         }
     }
 
@@ -700,7 +692,10 @@ fn collect_rust_imports(program: &Program) -> HashMap<String, HashSet<String>> {
     let mut imports: HashMap<String, HashSet<String>> = HashMap::new();
 
     for statement in &program.statements {
-        if let Statement::Use { imports: use_imports } = statement {
+        if let Statement::Use {
+            imports: use_imports,
+        } = statement
+        {
             for import in use_imports {
                 if let Some((namespace, crate_name)) = import.module.split_once(':') {
                     if namespace == "rust" {
@@ -1069,8 +1064,6 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                     _ => bail!("unknown generic type: {}", base),
                 }
             }
-            Type::Option(_) => bail!("Option types are not supported in codegen yet"),
-            Type::Result { .. } => bail!("Result types are not supported in codegen yet"),
         }
     }
 
@@ -1974,9 +1967,9 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                     .clone()
                     .ok_or_else(|| anyhow!("missing value"))?
                     .into_int_value();
-                let call = self
-                    .builder
-                    .build_call(stringify_fn, &[int_val.into()], "stringify_int")?;
+                let call =
+                    self.builder
+                        .build_call(stringify_fn, &[int_val.into()], "stringify_int")?;
                 let str_val = call
                     .try_as_basic_value()
                     .left()
@@ -1991,9 +1984,9 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                     .clone()
                     .ok_or_else(|| anyhow!("missing value"))?
                     .into_int_value();
-                let call = self
-                    .builder
-                    .build_call(stringify_fn, &[int_val.into()], "stringify_int")?;
+                let call =
+                    self.builder
+                        .build_call(stringify_fn, &[int_val.into()], "stringify_int")?;
                 let str_val = call
                     .try_as_basic_value()
                     .left()
@@ -2034,20 +2027,23 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                 match op {
                     BinaryOp::Add => {
                         let concat_fn = self.declare_or_get_concat_function();
-                        let call = self
-                            .builder
-                            .build_call(concat_fn, &[lhs.into(), rhs.into()], "str_concat")?;
-                        let value = call
-                            .try_as_basic_value()
-                            .left()
-                            .ok_or_else(|| anyhow!("otter_concat_strings did not return a value"))?;
+                        let call = self.builder.build_call(
+                            concat_fn,
+                            &[lhs.into(), rhs.into()],
+                            "str_concat",
+                        )?;
+                        let value = call.try_as_basic_value().left().ok_or_else(|| {
+                            anyhow!("otter_concat_strings did not return a value")
+                        })?;
                         return Ok(EvaluatedValue::with_value(value, OtterType::Str));
                     }
                     BinaryOp::Eq | BinaryOp::Ne => {
                         let strcmp_fn = self.declare_or_get_strcmp_function();
-                        let call = self
-                            .builder
-                            .build_call(strcmp_fn, &[lhs.into(), rhs.into()], "strcmp")?;
+                        let call = self.builder.build_call(
+                            strcmp_fn,
+                            &[lhs.into(), rhs.into()],
+                            "strcmp",
+                        )?;
                         let result = call
                             .try_as_basic_value()
                             .left()
@@ -2069,7 +2065,7 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                     }
                     other => bail!("unsupported binary operation for strings: {:?}", other),
                 }
-            },
+            }
             OtterType::I64 => {
                 let lhs = left_value
                     .value
@@ -2154,7 +2150,7 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                     _ => bail!("unsupported binary operation for integers: {:?}", op),
                 };
                 return Ok(EvaluatedValue::with_value(result, OtterType::I64));
-            },
+            }
             OtterType::F64 => {
                 let lhs = left_value
                     .value
@@ -2271,7 +2267,7 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                     _ => bail!("unsupported binary operation for floats: {:?}", op),
                 };
                 return Ok(EvaluatedValue::with_value(result, OtterType::F64));
-            },
+            }
             _ => bail!(
                 "binary expressions support only integers and floats, got {:?}",
                 left_value.ty
@@ -4038,8 +4034,7 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
         if let Err(err) = self.module.run_passes(&pipeline, target_machine, options) {
             warn!(
                 "Failed to run optimization pipeline `{}`: {}",
-                pipeline,
-                err
+                pipeline, err
             );
         }
     }

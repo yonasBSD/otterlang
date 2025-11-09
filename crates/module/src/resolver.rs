@@ -65,21 +65,38 @@ impl ModulePath {
                         return Ok(path);
                     }
                 }
-                Self::resolve_relative_path(source_dir, &PathBuf::from(name))
+                let relative = Self::module_name_to_path(name);
+                Self::resolve_relative_path(source_dir, &relative)
             }
-            ModulePath::Relative(rel_path) => {
-                Self::resolve_relative_path(source_dir, rel_path)
-            }
-            ModulePath::Absolute(abs_path) => {
-                Self::resolve_absolute_path(abs_path)
-            }
+            ModulePath::Relative(rel_path) => Self::resolve_relative_path(source_dir, rel_path),
+            ModulePath::Absolute(abs_path) => Self::resolve_absolute_path(abs_path),
         }
     }
 }
 
 impl ModulePath {
+    fn module_name_to_path(name: &str) -> PathBuf {
+        if name.contains(std::path::MAIN_SEPARATOR) {
+            return PathBuf::from(name);
+        }
+
+        let mut path = PathBuf::new();
+        for segment in name.split('.') {
+            if segment.is_empty() {
+                continue;
+            }
+            path.push(segment);
+        }
+
+        if path.components().count() == 0 {
+            PathBuf::from(name)
+        } else {
+            path
+        }
+    }
+
     fn resolve_stdlib_path(stdlib: &Path, name: &str) -> Result<Option<PathBuf>> {
-        let mut path = stdlib.join(name);
+        let mut path = stdlib.join(Self::module_name_to_path(name));
         if path.is_dir() {
             path = path.join("mod.ot");
         } else {
@@ -90,11 +107,9 @@ impl ModulePath {
         }
 
         if path.exists() {
-            Ok(Some(
-                path.canonicalize().with_context(|| {
-                    format!("failed to canonicalize module path {}", path.display())
-                })?,
-            ))
+            Ok(Some(path.canonicalize().with_context(|| {
+                format!("failed to canonicalize module path {}", path.display())
+            })?))
         } else {
             Ok(None)
         }

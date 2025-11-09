@@ -128,6 +128,45 @@ impl Formatter {
                 }
                 result
             }
+            Statement::Enum {
+                name,
+                variants,
+                public,
+                generics,
+            } => {
+                let pub_str = if *public { "pub " } else { "" };
+                let gen_str = if generics.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{}>", generics.join(", "))
+                };
+                let mut result = format!(
+                    "{}{}enum {}{}:\n",
+                    self.indent(indent),
+                    pub_str,
+                    name,
+                    gen_str
+                );
+                for variant in variants {
+                    if variant.fields.is_empty() {
+                        result.push_str(&format!("{}    {}\n", self.indent(indent), variant.name));
+                    } else {
+                        let fields = variant
+                            .fields
+                            .iter()
+                            .map(|ty| self.format_type(ty))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        result.push_str(&format!(
+                            "{}    {}: ({})\n",
+                            self.indent(indent),
+                            variant.name,
+                            fields
+                        ));
+                    }
+                }
+                result
+            }
             Statement::TypeAlias {
                 name,
                 target,
@@ -475,6 +514,22 @@ impl Formatter {
             ast::nodes::Pattern::Wildcard => "_".to_string(),
             ast::nodes::Pattern::Literal(lit) => self.format_literal(lit),
             ast::nodes::Pattern::Identifier(name) => name.clone(),
+            ast::nodes::Pattern::EnumVariant {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                if fields.is_empty() {
+                    format!("{}.{}", enum_name, variant)
+                } else {
+                    let inner = fields
+                        .iter()
+                        .map(|p| self.format_pattern(p))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}.{}({})", enum_name, variant, inner)
+                }
+            }
             ast::nodes::Pattern::Struct { name, fields } => {
                 let fields_str = fields
                     .iter()
@@ -535,16 +590,6 @@ impl Formatter {
                         .join(", ");
                     format!("{}<{}>", base, args_str)
                 }
-            }
-            ast::nodes::Type::Option(inner) => {
-                format!("Option<{}>", self.format_type(inner))
-            }
-            ast::nodes::Type::Result { ok, err } => {
-                format!(
-                    "Result<{}, {}>",
-                    self.format_type(ok),
-                    self.format_type(err)
-                )
             }
         }
     }

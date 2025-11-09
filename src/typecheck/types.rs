@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ast::nodes::Type;
+use ast::nodes::{EnumVariant, Type};
 
 use language::LanguageFeatureFlags;
 
@@ -39,12 +39,11 @@ pub enum TypeInfo {
         name: String,
         fields: HashMap<String, TypeInfo>,
     },
-    /// Optional value type
-    Option(Box<TypeInfo>),
-    /// Result type storing success and error payloads
-    Result {
-        ok: Box<TypeInfo>,
-        err: Box<TypeInfo>,
+    /// Enum type with named variants
+    Enum {
+        name: String,
+        args: Vec<TypeInfo>,
+        variants: HashMap<String, EnumVariantInfo>,
     },
     /// Strong type alias (newtype-style)
     Alias {
@@ -56,6 +55,12 @@ pub enum TypeInfo {
     Unknown,
     /// Error type (used for error recovery)
     Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumVariantInfo {
+    pub name: String,
+    pub fields: Vec<TypeInfo>,
 }
 
 impl TypeInfo {
@@ -102,10 +107,32 @@ impl TypeInfo {
                     .map(|(k, v)| (k.clone(), v.substitute(substitutions)))
                     .collect(),
             },
-            TypeInfo::Option(inner) => TypeInfo::Option(Box::new(inner.substitute(substitutions))),
-            TypeInfo::Result { ok, err } => TypeInfo::Result {
-                ok: Box::new(ok.substitute(substitutions)),
-                err: Box::new(err.substitute(substitutions)),
+            TypeInfo::Enum {
+                name,
+                args,
+                variants,
+            } => TypeInfo::Enum {
+                name: name.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| arg.substitute(substitutions))
+                    .collect(),
+                variants: variants
+                    .iter()
+                    .map(|(variant_name, variant)| {
+                        (
+                            variant_name.clone(),
+                            EnumVariantInfo {
+                                name: variant.name.clone(),
+                                fields: variant
+                                    .fields
+                                    .iter()
+                                    .map(|field| field.substitute(substitutions))
+                                    .collect(),
+                            },
+                        )
+                    })
+                    .collect(),
             },
             TypeInfo::Alias {
                 name,
@@ -169,11 +196,51 @@ impl TypeInfo {
             (TypeInfo::Dict { key: k1, value: v1 }, TypeInfo::Dict { key: k2, value: v2 }) => {
                 k1.is_compatible_with(k2) && v1.is_compatible_with(v2)
             }
-            (TypeInfo::Option(inner_a), TypeInfo::Option(inner_b)) => {
-                inner_a.is_compatible_with(inner_b)
+            (
+                TypeInfo::Enum {
+                    name: name_a,
+                    args: args_a,
+                    ..
+                },
+                TypeInfo::Enum {
+                    name: name_b,
+                    args: args_b,
+                    ..
+                },
+            ) => {
+                name_a == name_b
+                    && args_a.len() == args_b.len()
+                    && args_a
+                        .iter()
+                        .zip(args_b.iter())
+                        .all(|(a, b)| a.is_compatible_with(b))
             }
-            (TypeInfo::Result { ok: ok1, err: err1 }, TypeInfo::Result { ok: ok2, err: err2 }) => {
-                ok1.is_compatible_with(ok2) && err1.is_compatible_with(err2)
+            (
+                TypeInfo::Enum { name, args, .. },
+                TypeInfo::Generic {
+                    base,
+                    args: other_args,
+                },
+            )
+            | (
+                TypeInfo::Generic {
+                    base,
+                    args: other_args,
+                },
+                TypeInfo::Enum { name, args, .. },
+            ) => {
+                if name != base {
+                    return false;
+                }
+                if other_args.is_empty() {
+                    true
+                } else {
+                    args.len() == other_args.len()
+                        && args
+                            .iter()
+                            .zip(other_args.iter())
+                            .all(|(a, b)| a.is_compatible_with(b))
+                }
             }
             (
                 TypeInfo::Alias {
@@ -270,9 +337,17 @@ impl TypeInfo {
                     format!("{} {{ {} }}", name, fields_str)
                 }
             }
-            TypeInfo::Option(inner) => format!("Option<{}>", inner.display_name()),
-            TypeInfo::Result { ok, err } => {
-                format!("Result<{}, {}>", ok.display_name(), err.display_name())
+            TypeInfo::Enum { name, args, .. } => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let args_str = args
+                        .iter()
+                        .map(|t| t.display_name())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}<{}>", name, args_str)
+                }
             }
             TypeInfo::Alias { name, .. } => name.clone(),
             TypeInfo::Unknown => "?".to_string(),
@@ -319,11 +394,6 @@ impl From<&Type> for TypeInfo {
                     base: base.clone(),
                     args: args.iter().map(|t| t.into()).collect(),
                 },
-            },
-            Type::Option(inner) => TypeInfo::Option(Box::new(inner.as_ref().into())),
-            Type::Result { ok, err } => TypeInfo::Result {
-                ok: Box::new(ok.as_ref().into()),
-                err: Box::new(err.as_ref().into()),
             },
         }
     }
@@ -407,6 +477,8 @@ pub struct TypeContext {
     pub structs: HashMap<String, HashMap<String, TypeInfo>>,
     /// Type aliases: name -> actual type
     pub type_aliases: HashMap<String, TypeInfo>,
+    /// Enum definitions available in the current module
+    pub enums: HashMap<String, EnumDefinition>,
     /// Active language feature flags
     pub features: LanguageFeatureFlags,
 }
@@ -423,6 +495,7 @@ impl TypeContext {
             generic_params: Vec::new(),
             structs: HashMap::new(),
             type_aliases: HashMap::new(),
+            enums: HashMap::new(),
             features,
         }
     }
@@ -489,6 +562,99 @@ impl TypeContext {
         self.type_aliases.get(name)
     }
 
+    pub fn define_enum(&mut self, definition: EnumDefinition) {
+        self.enums.insert(definition.name.clone(), definition);
+    }
+
+    pub fn get_enum(&self, name: &str) -> Option<&EnumDefinition> {
+        self.enums.get(name)
+    }
+
+    pub fn enum_variant(&self, enum_name: &str, variant: &str) -> Option<&EnumVariant> {
+        self.enums
+            .get(enum_name)
+            .and_then(|definition| definition.variants.iter().find(|v| v.name == variant))
+    }
+
+    pub fn build_enum_type(&self, name: &str, args: Vec<TypeInfo>) -> Option<TypeInfo> {
+        let definition = self.enums.get(name)?;
+        let mut normalized_args = if args.is_empty() {
+            vec![TypeInfo::Unknown; definition.generics.len()]
+        } else if args.len() < definition.generics.len() {
+            let mut padded = args;
+            padded.extend(
+                std::iter::repeat(TypeInfo::Unknown).take(definition.generics.len() - padded.len()),
+            );
+            padded
+        } else {
+            args
+        };
+
+        if normalized_args.len() > definition.generics.len() {
+            normalized_args.truncate(definition.generics.len());
+        }
+
+        let substitutions: HashMap<String, TypeInfo> = definition
+            .generics
+            .iter()
+            .cloned()
+            .zip(normalized_args.iter().cloned())
+            .collect();
+
+        let variants = definition
+            .variants
+            .iter()
+            .map(|variant| {
+                let fields = variant
+                    .fields
+                    .iter()
+                    .map(|ty| {
+                        let raw: TypeInfo = ty.into();
+                        raw.substitute(&substitutions)
+                    })
+                    .collect();
+                (
+                    variant.name.clone(),
+                    EnumVariantInfo {
+                        name: variant.name.clone(),
+                        fields,
+                    },
+                )
+            })
+            .collect();
+
+        Some(TypeInfo::Enum {
+            name: name.to_string(),
+            args: normalized_args,
+            variants,
+        })
+    }
+
+    pub fn normalize_type(&self, ty: TypeInfo) -> TypeInfo {
+        match ty {
+            TypeInfo::Generic { base, args } => {
+                if let Some(enum_ty) = self.build_enum_type(&base, args.clone()) {
+                    enum_ty
+                } else {
+                    TypeInfo::Generic { base, args }
+                }
+            }
+            other => other,
+        }
+    }
+
+    pub fn type_from_annotation(&self, ty: &Type) -> TypeInfo {
+        let mut info = TypeInfo::from(ty);
+        if let TypeInfo::Generic { base, args } = &info {
+            if args.is_empty() {
+                if let Some(aliased_type) = self.resolve_type_alias(base) {
+                    info = aliased_type.clone();
+                }
+            }
+        }
+        self.normalize_type(info)
+    }
+
     pub fn set_language_features(&mut self, features: LanguageFeatureFlags) {
         self.features = features;
     }
@@ -498,4 +664,11 @@ impl Default for TypeContext {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDefinition {
+    pub name: String,
+    pub generics: Vec<String>,
+    pub variants: Vec<EnumVariant>,
 }
