@@ -69,6 +69,15 @@ rustup toolchain install nightly
 cargo +nightly build --release
 ```
 
+**Fedora 43:**
+```bash
+sudo dnf -y install llvm18 llvm18-devel clang18
+export LLVM_SYS_181_PREFIX=/usr/lib64/llvm18
+export LLVM_SYS_180_PREFIX=$LLVM_SYS_181_PREFIX
+rustup toolchain install nightly
+cargo +nightly build --release
+```
+
 **Windows:**
 ```powershell
 # Install LLVM 18.1 using llvmenv (recommended)
