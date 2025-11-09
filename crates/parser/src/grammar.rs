@@ -609,9 +609,14 @@ fn pattern_parser(
 
         let identifier_pattern = identifier_parser().map(Pattern::Identifier);
 
+        let variant_name = choice((
+            identifier_parser(),
+            just(TokenKind::None).to("None".to_string()),
+        ));
+
         let enum_variant_pattern = identifier_parser()
             .then_ignore(just(TokenKind::Dot))
-            .then(identifier_parser())
+            .then(variant_name)
             .then(
                 just(TokenKind::LParen)
                     .ignore_then(
@@ -1004,7 +1009,12 @@ fn program_parser() -> impl Parser<TokenKind, Program, Error = Simple<TokenKind>
             .map(|params| params.unwrap_or_default())
     };
 
-    let enum_variant = identifier_parser()
+    let enum_variant_name = choice((
+        identifier_parser(),
+        just(TokenKind::None).to("None".to_string()),
+    ));
+
+    let enum_variant = enum_variant_name
         .then(
             just(TokenKind::Colon)
                 .ignore_then(
@@ -1191,5 +1201,12 @@ mod tests {
             }
             other => panic!("expected use statement, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_core_stdlib_module() {
+        let source = include_str!("../../../stdlib/otter/core.ot");
+        let tokens = lexer::tokenize(source).expect("tokenize core module");
+        parse(&tokens).expect("parse core module");
     }
 }
