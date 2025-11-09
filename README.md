@@ -26,10 +26,8 @@ cargo +nightly build --release
 
 # Create and run your first program
 cat > hello.ot << 'EOF'
-use fmt
-
-fn main():
-    fmt.println("Hello from OtterLang!")
+def main():
+    print("Hello from OtterLang!")
 EOF
 
 otter run hello.ot
@@ -138,31 +136,31 @@ cargo +nightly test --release
 Clean indentation-based syntax with modern features:
 
 ```otter
-use fmt, math
+use math
 
-fn greet(name: str) -> str:
+def greet(name: str) -> str:
     return "Hello, " + name + "!"
 
-struct Point:
+class Point:
     x: float
     y: float
 
-    fn distance(self) -> float:
+    def distance(self) -> float:
         return math.sqrt(self.x * self.x + self.y * self.y)
 
-fn main():
+def main():
     let message = greet("World")
-    fmt.println(message)
+    print(message)
 
     let p = Point(x=3.0, y=4.0)
     let dist = p.distance()
-    fmt.println("Point: (" + stringify(p.x) + ", " + stringify(p.y) + "), distance: " + stringify(dist))
+    print("Point: (" + str(p.x) + ", " + str(p.y) + "), distance: " + str(dist))
 
     if len(message) > 10:
-        fmt.println("Long message")
+        print("Long message")
 
     for i in 0..10:
-        fmt.println(stringify(i))
+        print(str(i))
 ```
 
 ### Transparent Rust FFI
@@ -170,11 +168,11 @@ fn main():
 Automatically use any Rust crate without manual configuration:
 
 ```otter
-use fmt, rust:rand
+use rust:rand
 
-fn main():
+def main():
     let random = rand.random_f64()
-    fmt.println("Random: " + stringify(random))
+    print("Random: " + str(random))
 ```
 
 **Key advantages:**
@@ -212,33 +210,31 @@ use otter:json  # still supported
 Modern exception handling with zero-cost success path:
 
 ```otter
-use fmt
-
-fn divide(x: int, y: int) -> int:
+def divide(x: int, y: int) -> int:
     if y == 0:
         raise "Division by zero"
     return x / y
 
-fn safe_operation():
+def safe_operation():
     try:
         let result = divide(10, 0)
-        fmt.println("Result: " + stringify(result))
+        print("Result: " + str(result))
     except Error as e:
-        fmt.println("Caught error: " + stringify(e))
+        print("Caught error: " + str(e))
     else:
-        fmt.println("No errors occurred")
+        print("No errors occurred")
     finally:
-        fmt.println("Cleanup always runs")
+        print("Cleanup always runs")
 
-fn nested_exceptions():
+def nested_exceptions():
     try:
         try:
             raise "Inner error"
         except Error:
-            fmt.println("Handled inner error")
+            print("Handled inner error")
             raise "Outer error"
     except Error:
-        fmt.println("Handled outer error")
+        print("Handled outer error")
 ```
 
 **Features:**
@@ -337,33 +333,31 @@ The generated `.wasm` file can be run in any WebAssembly runtime (Node.js, brows
 Below are illustrative examples of how unit tests will look in OtterLang. A built-in `otter test` runner is planned (see `roadmap.md`).
 
 ```otter
-use fmt
-
-struct User:
+class User:
     id: int
     name: str
 
-fn make_users() -> list<User>:
+def make_users() -> list<User>:
     return [User(id=1, name="Ana"), User(id=2, name="Bo")] 
 
-fn to_map(users: list<User>) -> dict<int, str>:
+def to_map(users: list<User>) -> dict<int, str>:
     let m = { }
     for u in users:
         m[u.id] = u.name
     return m
 
-fn test_user_list_basic():
+def test_user_list_basic():
     let xs = make_users()
     assert len(xs) == 2
     assert xs[0].name == "Ana"
 
-fn test_dict_building():
+def test_dict_building():
     let m = to_map(make_users())
     assert m[1] == "Ana"
     assert m.get(3, default="none") == "none"
 
-fn test_nested_structs_and_lists():
-    struct Team:
+def test_nested_structs_and_lists():
+    class Team:
         name: str
         members: list<User>
 
