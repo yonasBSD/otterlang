@@ -1,5 +1,5 @@
-use chumsky::prelude::*;
 use chumsky::Stream;
+use chumsky::prelude::*;
 
 use ast::nodes::{
     BinaryOp, Block, ExceptHandler, Expr, FStringPart, Function, Literal, MatchArm, NumberLiteral,
