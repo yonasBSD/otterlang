@@ -1210,6 +1210,7 @@ dependencies = [
  "memmap2",
  "once_cell",
  "parking_lot",
+ "parser",
  "rayon",
  "serde",
  "serde_json",
