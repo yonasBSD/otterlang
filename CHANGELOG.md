@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type inference is limited
 - Task runtime is experimental
 - Windows support is experimental
-- Requires LLVM 15 specifically
+- Requires LLVM 18 specifically
 
 ## Versioning Policy
 
