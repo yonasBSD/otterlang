@@ -531,7 +531,7 @@ impl LanguageServer for Backend {
         items.push(CompletionItem {
             label: "print".into(),
             kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some("fn print(message: string)".into()),
+            detail: Some("def print(message: string)".into()),
             ..Default::default()
         });
 

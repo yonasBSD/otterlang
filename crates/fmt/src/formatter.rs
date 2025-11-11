@@ -288,7 +288,7 @@ impl Formatter {
             String::new()
         };
         format!(
-            "{}{}fn {}({}){}:\n{}",
+            "{}{}def {}({}){}:\n{}",
             self.indent(indent),
             pub_str,
             f.name,
@@ -494,14 +494,19 @@ impl Formatter {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
+                let params_display = if params.is_empty() {
+                    String::from("()")
+                } else {
+                    format!("({})", params_str)
+                };
                 let ret_str = if let Some(ret_ty_val) = ret_ty {
                     format!(" -> {}", self.format_type(ret_ty_val))
                 } else {
                     String::new()
                 };
                 format!(
-                    "fn({}){} => {}",
-                    params_str,
+                    "lambda {}{}:\n{}",
+                    params_display,
                     ret_str,
                     self.format_block(body, indent + 1)
                 )
