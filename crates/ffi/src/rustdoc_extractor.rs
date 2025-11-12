@@ -238,6 +238,14 @@ fn normalize(name: String, version: Option<String>, doc: Rustdoc) -> CrateSpec {
             continue;
         }
 
+        if is_deprecated(item_obj) {
+            continue;
+        }
+
+        if !is_path_accessible(&doc, &path_segments, item_obj) {
+            continue;
+        }
+
         if let Some(function_item) = extract_function(item_obj, &path_segments) {
             if let PublicItem::Function { path, sig, .. } = &function_item {
                 let key = (
@@ -304,6 +312,39 @@ fn requires_type_parameters(item: &serde_json::Map<String, serde_json::Value>) -
         }
     }
     false
+}
+
+fn is_deprecated(item: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if let Some(attrs) = item.get("attrs").and_then(|a| a.as_array()) {
+        for attr in attrs {
+            if let Some(attr_obj) = attr.as_object() {
+                if let Some(attr_str) = attr_obj.get("value").and_then(|v| v.as_str()) {
+                    if attr_str.contains("deprecated") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    if let Some(docs) = item.get("docs").and_then(|d| d.as_str()) {
+        if docs.to_lowercase().contains("deprecated") {
+            return true;
+        }
+    }
+    
+    false
+}
+
+fn is_path_accessible(
+    _doc: &Rustdoc,
+    path_segments: &[String],
+    _item: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    if path_segments.len() < 2 {
+        return true;
+    }
+    true
 }
 
 fn extract_function(

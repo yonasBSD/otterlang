@@ -164,13 +164,9 @@ impl RustStubGenerator {
                 };
 
                 if sig.is_async || matches!(sig.return_type, Some(RustTypeRef::Future { .. })) {
-                    // Async shims: spawn -> Opaque handle, await -> T
-                    // spawn
                     let spawn_name = format!("{}.{}_spawn", export_name, sig.name);
                     let spawn_expr = {
                         let rp = rust_path.clone().unwrap();
-                        // Call path with args; do not append .await because we spawn the future
-                        // Expr placeholders {0},{1},... already substituted by render_expr_invocation
                         format!(
                             "ffi_store::insert(rt().spawn(async move {{ {rp}({args}) }}))",
                             rp = rp,
@@ -193,8 +189,6 @@ impl RustStubGenerator {
                         rust_path: None,
                         call: CallTemplate::Expr(spawn_expr),
                     });
-
-                    // await
                     let await_name = format!("{}.{}_await", export_name, sig.name);
                     let out_ty = match &sig.return_type {
                         Some(RustTypeRef::Future { output }) => {
@@ -239,9 +233,7 @@ impl RustStubGenerator {
                         call: CallTemplate::Direct,
                     });
 
-                    // Add Option/Result JSON helpers for ergonomic nil/error handling on Otter side
                     if let Some(ret_ty) = &sig.return_type {
-                        // Prepare placeholder argument list like {0},{1},...
                         let args_ph = (0..sig.params.len())
                             .map(|i| format!("{{{}}}", i))
                             .collect::<Vec<_>>()
@@ -334,7 +326,6 @@ impl RustStubGenerator {
         source.push_str("use parking_lot::Mutex;\n");
         source.push_str("use serde_json::{json, Value};\n");
         source.push_str("use std::any::Any;\n");
-        source.push_str("use std::collections::HashMap;\n");
         source.push_str("use std::sync::atomic::{AtomicU64, Ordering};\n\n");
         source.push_str("use tokio::runtime::Runtime;\n");
 
