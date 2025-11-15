@@ -33,7 +33,7 @@ static BUFFERS: Lazy<RwLock<std::collections::HashMap<HandleId, Buffer>>> =
 // File I/O Functions
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_print(message: *const c_char) {
     if message.is_null() {
         return;
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn otter_std_io_print(message: *const c_char) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_println(message: *const c_char) {
     if message.is_null() {
         println!();
@@ -62,7 +62,7 @@ pub unsafe extern "C" fn otter_std_io_println(message: *const c_char) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_eprintln(message: *const c_char) {
     if message.is_null() {
         eprintln!();
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn otter_std_io_eprintln(message: *const c_char) {
     eprintln!("{str_ref}");
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_io_read_line() -> *mut c_char {
     let mut line = String::new();
     let mut stdin = io::stdin().lock();
@@ -96,7 +96,7 @@ pub extern "C" fn otter_std_io_read_line() -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn otter_std_io_free_string(ptr: *mut c_char) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_read(path: *const c_char) -> *mut c_char {
     if path.is_null() {
         return std::ptr::null_mut();
@@ -123,7 +123,7 @@ pub unsafe extern "C" fn otter_std_io_read(path: *const c_char) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_write(path: *const c_char, data: *const c_char) -> i32 {
     if path.is_null() || data.is_null() {
         return 0;
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn otter_std_io_write(path: *const c_char, data: *const c_
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_copy(src: *const c_char, dst: *const c_char) -> i32 {
     if src.is_null() || dst.is_null() {
         return 0;
@@ -155,7 +155,7 @@ pub unsafe extern "C" fn otter_std_io_copy(src: *const c_char, dst: *const c_cha
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_lines(path: *const c_char) -> u64 {
     if path.is_null() {
         return 0;
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn otter_std_io_lines(path: *const c_char) -> u64 {
 
             // Create a list handle using builtins module
             // We'll use the builtin list functions directly
-            extern "C" {
+            unsafe extern "C" {
                 fn otter_builtin_list_new() -> u64;
                 fn otter_builtin_append_list_string(handle: u64, val: *const c_char) -> i32;
             }
@@ -202,7 +202,7 @@ pub unsafe extern "C" fn otter_std_io_lines(path: *const c_char) -> u64 {
 // Buffer Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_buffer(data: *const c_char) -> u64 {
     let id = next_handle_id();
     let buffer = if data.is_null() {
@@ -224,7 +224,7 @@ pub unsafe extern "C" fn otter_std_io_buffer(data: *const c_char) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_io_buffer_read(handle: u64, n: i64) -> *mut c_char {
     let mut buffers = BUFFERS.write();
     if let Some(buffer) = buffers.get_mut(&handle) {
@@ -257,7 +257,7 @@ pub extern "C" fn otter_std_io_buffer_read(handle: u64, n: i64) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_buffer_write(handle: u64, bytes: *const c_char) -> i32 {
     if bytes.is_null() {
         return 0;
@@ -274,7 +274,7 @@ pub unsafe extern "C" fn otter_std_io_buffer_write(handle: u64, bytes: *const c_
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_io_buffer_clear(handle: u64) {
     let mut buffers = BUFFERS.write();
     if let Some(buffer) = buffers.get_mut(&handle) {
@@ -283,7 +283,7 @@ pub extern "C" fn otter_std_io_buffer_clear(handle: u64) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_io_buffer_data(handle: u64) -> *mut c_char {
     let buffers = BUFFERS.read();
     if let Some(buffer) = buffers.get(&handle) {
@@ -304,7 +304,7 @@ pub extern "C" fn otter_std_io_buffer_data(handle: u64) -> *mut c_char {
 // File System Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_exists(path: *const c_char) -> i32 {
     if path.is_null() {
         return 0;
@@ -317,7 +317,7 @@ pub unsafe extern "C" fn otter_std_io_exists(path: *const c_char) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_mkdir(path: *const c_char) -> i32 {
     if path.is_null() {
         return 0;
@@ -329,7 +329,7 @@ pub unsafe extern "C" fn otter_std_io_mkdir(path: *const c_char) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_rmdir(path: *const c_char) -> i32 {
     if path.is_null() {
         return 0;
@@ -341,7 +341,7 @@ pub unsafe extern "C" fn otter_std_io_rmdir(path: *const c_char) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_remove(path: *const c_char) -> i32 {
     if path.is_null() {
         return 0;
@@ -353,7 +353,7 @@ pub unsafe extern "C" fn otter_std_io_remove(path: *const c_char) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_list_dir(path: *const c_char) -> u64 {
     if path.is_null() {
         return 0;
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn otter_std_io_list_dir(path: *const c_char) -> u64 {
 
     match fs::read_dir(&path_str) {
         Ok(entries) => {
-            extern "C" {
+            unsafe extern "C" {
                 fn otter_builtin_list_new() -> u64;
                 fn otter_builtin_append_list_string(handle: u64, val: *const c_char) -> i32;
             }
@@ -388,41 +388,33 @@ pub unsafe extern "C" fn otter_std_io_list_dir(path: *const c_char) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_is_file(path: *const c_char) -> i32 {
     if path.is_null() {
         return 0;
     }
     let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("").to_string() };
     if let Ok(metadata) = fs::metadata(&path_str) {
-        if metadata.is_file() {
-            1
-        } else {
-            0
-        }
+        if metadata.is_file() { 1 } else { 0 }
     } else {
         0
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_is_dir(path: *const c_char) -> i32 {
     if path.is_null() {
         return 0;
     }
     let path_str = unsafe { CStr::from_ptr(path).to_str().unwrap_or("").to_string() };
     if let Ok(metadata) = fs::metadata(&path_str) {
-        if metadata.is_dir() {
-            1
-        } else {
-            0
-        }
+        if metadata.is_dir() { 1 } else { 0 }
     } else {
         0
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_io_file_size(path: *const c_char) -> i64 {
     if path.is_null() {
         return -1;

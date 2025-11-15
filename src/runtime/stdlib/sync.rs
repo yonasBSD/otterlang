@@ -55,7 +55,7 @@ static ONCE_HANDLES: Lazy<RwLock<HashMap<HandleId, OnceHandle>>> =
 // Mutex Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_mutex() -> u64 {
     let id = next_handle_id();
     let mutex = MutexHandle {
@@ -67,7 +67,7 @@ pub extern "C" fn otter_sync_mutex() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_lock(handle: u64) {
     let mutexes = MUTEXES.read();
     if let Some(mutex) = mutexes.get(&handle) {
@@ -78,7 +78,7 @@ pub extern "C" fn otter_sync_lock(handle: u64) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_unlock(handle: u64) {
     THREAD_LOCKS.with(|locks| {
         locks.borrow_mut().remove(&handle);
@@ -89,7 +89,7 @@ pub extern "C" fn otter_sync_unlock(handle: u64) {
 // WaitGroup Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_waitgroup() -> u64 {
     let id = next_handle_id();
     let wg = WaitGroup {
@@ -101,7 +101,7 @@ pub extern "C" fn otter_sync_waitgroup() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_waitgroup_add(handle: u64, delta: i64) {
     let wait_groups = WAIT_GROUPS.read();
     if let Some(wg) = wait_groups.get(&handle) {
@@ -113,7 +113,7 @@ pub extern "C" fn otter_sync_waitgroup_add(handle: u64, delta: i64) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_waitgroup_done(handle: u64) {
     let wait_groups = WAIT_GROUPS.read();
     if let Some(wg) = wait_groups.get(&handle) {
@@ -124,7 +124,7 @@ pub extern "C" fn otter_sync_waitgroup_done(handle: u64) {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_waitgroup_wait(handle: u64) {
     let wait_groups = WAIT_GROUPS.read();
     if let Some(wg) = wait_groups.get(&handle) {
@@ -138,7 +138,7 @@ pub extern "C" fn otter_sync_waitgroup_wait(handle: u64) {
 // Atomic Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_atomic_int(initial: i64) -> u64 {
     let id = next_handle_id();
     let atomic = AtomicInt {
@@ -150,7 +150,7 @@ pub extern "C" fn otter_sync_atomic_int(initial: i64) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_atomic_add(handle: u64, delta: i64) -> i64 {
     let atomics = ATOMICS.read();
     if let Some(atomic) = atomics.get(&handle) {
@@ -160,7 +160,7 @@ pub extern "C" fn otter_sync_atomic_add(handle: u64, delta: i64) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_atomic_get(handle: u64) -> i64 {
     let atomics = ATOMICS.read();
     if let Some(atomic) = atomics.get(&handle) {
@@ -170,7 +170,7 @@ pub extern "C" fn otter_sync_atomic_get(handle: u64) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_atomic_set(handle: u64, value: i64) {
     let atomics = ATOMICS.read();
     if let Some(atomic) = atomics.get(&handle) {
@@ -182,7 +182,7 @@ pub extern "C" fn otter_sync_atomic_set(handle: u64, value: i64) {
 // Once Operations
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_once() -> u64 {
     let id = next_handle_id();
     let once_handle = OnceHandle {
@@ -194,7 +194,7 @@ pub extern "C" fn otter_sync_once() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_sync_once_call(handle: u64, callback: extern "C" fn()) {
     let once_handles = ONCE_HANDLES.read();
     if let Some(once_handle) = once_handles.get(&handle) {

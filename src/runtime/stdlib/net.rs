@@ -144,7 +144,7 @@ fn run_http_request(method: &str, url: &str, body: Option<&str>) -> HttpResponse
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_net_listen(addr: *const c_char) -> u64 {
     if addr.is_null() {
         return 0;
@@ -164,7 +164,7 @@ pub unsafe extern "C" fn otter_std_net_listen(addr: *const c_char) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_net_dial(addr: *const c_char) -> u64 {
     if addr.is_null() {
         return 0;
@@ -190,7 +190,7 @@ pub unsafe extern "C" fn otter_std_net_dial(addr: *const c_char) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_net_send(conn: u64, data: *const c_char) -> i32 {
     if data.is_null() {
         return 0;
@@ -213,7 +213,7 @@ pub unsafe extern "C" fn otter_std_net_send(conn: u64, data: *const c_char) -> i
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_net_recv(conn: u64) -> *mut c_char {
     let connections = CONNECTIONS.read();
     let Some(connection) = connections.get(&conn) else {
@@ -244,12 +244,12 @@ pub extern "C" fn otter_std_net_recv(conn: u64) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_net_close(conn: u64) {
     CONNECTIONS.write().remove(&conn);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_net_http_get(url: *const c_char) -> u64 {
     if url.is_null() {
         return 0;
@@ -265,7 +265,7 @@ pub unsafe extern "C" fn otter_std_net_http_get(url: *const c_char) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_net_http_post(url: *const c_char, body: *const c_char) -> u64 {
     if url.is_null() {
         return 0;
@@ -287,7 +287,7 @@ pub unsafe extern "C" fn otter_std_net_http_post(url: *const c_char, body: *cons
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_net_response_status(response: u64) -> i32 {
     let responses = HTTP_RESPONSES.read();
     responses
@@ -296,7 +296,7 @@ pub extern "C" fn otter_std_net_response_status(response: u64) -> i32 {
         .unwrap_or(0)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_net_response_body(response: u64) -> *mut c_char {
     let responses = HTTP_RESPONSES.read();
     if let Some(resp) = responses.get(&response) {
