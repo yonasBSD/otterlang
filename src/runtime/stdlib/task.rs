@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use crate::runtime::stdlib::runtime::task_metrics_clone;
 use crate::runtime::stdlib::runtime::{decrement_active_tasks, increment_active_tasks};
 use crate::runtime::symbol_registry::{FfiFunction, FfiSignature, FfiType, SymbolRegistry};
-use crate::runtime::task::{runtime, JoinHandle, TaskChannel, TaskRuntimeMetrics};
+use crate::runtime::task::{JoinHandle, TaskChannel, TaskRuntimeMetrics, runtime};
 
 type HandleId = u64;
 
@@ -30,7 +30,7 @@ fn next_handle_id() -> HandleId {
     NEXT_ID.fetch_add(1, Ordering::SeqCst)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_spawn(callback: TaskCallback) -> u64 {
     increment_active_tasks();
     let scheduler = runtime().scheduler().clone();
@@ -43,19 +43,19 @@ pub extern "C" fn otter_task_spawn(callback: TaskCallback) -> u64 {
     task_id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_join(handle: u64) {
     if let Some(join) = TASK_HANDLES.lock().remove(&handle) {
         join.join();
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_detach(handle: u64) {
     TASK_HANDLES.lock().remove(&handle);
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_sleep(ms: i64) {
     if ms <= 0 {
         return;
@@ -148,7 +148,7 @@ fn obtain_metrics() -> Option<Arc<TaskRuntimeMetrics>> {
     None
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_channel_string() -> u64 {
     let id = next_handle_id();
     let metrics = obtain_metrics();
@@ -161,7 +161,7 @@ pub extern "C" fn otter_task_channel_string() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_channel_int() -> u64 {
     let id = next_handle_id();
     let metrics = obtain_metrics();
@@ -174,7 +174,7 @@ pub extern "C" fn otter_task_channel_int() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_channel_float() -> u64 {
     let id = next_handle_id();
     let metrics = obtain_metrics();
@@ -187,7 +187,7 @@ pub extern "C" fn otter_task_channel_float() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_task_send_string(handle: u64, value: *const c_char) -> i32 {
     if value.is_null() {
         return 0;
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn otter_task_send_string(handle: u64, value: *const c_cha
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_send_int(handle: u64, value: i64) -> i32 {
     if let Some(wrapper) = INT_CHANNELS.lock().get(&handle) {
         wrapper.channel.send(value);
@@ -211,7 +211,7 @@ pub extern "C" fn otter_task_send_int(handle: u64, value: i64) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_send_float(handle: u64, value: f64) -> i32 {
     if let Some(wrapper) = FLOAT_CHANNELS.lock().get(&handle) {
         wrapper.channel.send(value);
@@ -221,7 +221,7 @@ pub extern "C" fn otter_task_send_float(handle: u64, value: f64) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_recv_string(handle: u64) -> *mut c_char {
     if let Some(wrapper) = STRING_CHANNELS.lock().get(&handle) {
         if let Some(value) = wrapper.channel.recv() {
@@ -234,7 +234,7 @@ pub extern "C" fn otter_task_recv_string(handle: u64) -> *mut c_char {
     std::ptr::null_mut()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_recv_int(handle: u64) -> i64 {
     if let Some(wrapper) = INT_CHANNELS.lock().get(&handle) {
         return wrapper.channel.recv().unwrap_or(0);
@@ -242,7 +242,7 @@ pub extern "C" fn otter_task_recv_int(handle: u64) -> i64 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_recv_float(handle: u64) -> f64 {
     if let Some(wrapper) = FLOAT_CHANNELS.lock().get(&handle) {
         return wrapper.channel.recv().unwrap_or(0.0);
@@ -250,7 +250,7 @@ pub extern "C" fn otter_task_recv_float(handle: u64) -> f64 {
     0.0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_task_close_channel(handle: u64) {
     // Close channels before removing them to wake waiting tasks
     if let Some(wrapper) = STRING_CHANNELS.lock().get(&handle) {

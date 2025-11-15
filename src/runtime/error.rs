@@ -137,17 +137,17 @@ impl ErrorStack {
 /// C-facing API functions for error handling
 /// These functions provide a stable C ABI for LLVM-generated code
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_push_context() -> bool {
     ErrorStack::push_context()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_pop_context() -> bool {
     ErrorStack::pop_context()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_raise(message_ptr: *const i8, message_len: usize) -> bool {
     if message_ptr.is_null() {
         return false;
@@ -165,7 +165,7 @@ pub extern "C" fn otter_error_raise(message_ptr: *const i8, message_len: usize) 
     ErrorStack::raise(error)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_raise_with_code(
     message_ptr: *const i8,
     message_len: usize,
@@ -186,12 +186,12 @@ pub extern "C" fn otter_error_raise_with_code(
     ErrorStack::raise(error)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_clear() {
     let _ = ErrorStack::clear();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_get_message(buffer: *mut i8, buffer_len: usize) -> usize {
     if let Some(message) = ErrorStack::get_message() {
         let message_bytes = message.as_bytes();
@@ -210,12 +210,12 @@ pub extern "C" fn otter_error_get_message(buffer: *mut i8, buffer_len: usize) ->
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_has_error() -> bool {
     ErrorStack::has_error()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_error_rethrow() {
     ErrorStack::rethrow()
 }

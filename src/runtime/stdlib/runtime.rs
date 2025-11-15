@@ -49,13 +49,13 @@ static TASK_METRICS: Lazy<RwLock<Option<Arc<TaskRuntimeMetrics>>>> =
 // ============================================================================
 
 /// Get the number of active tasks/threads
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_gos() -> i64 {
     ACTIVE_GOROUTINES.load(Ordering::SeqCst) as i64
 }
 
 /// Get the number of CPU cores
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_cpu_count() -> i64 {
     let mut system = System::new_all();
     system.refresh_cpu();
@@ -70,7 +70,7 @@ pub extern "C" fn otter_runtime_cpu_count() -> i64 {
 /// Get current heap memory usage in bytes
 /// Note: In Rust, we don't have direct heap access, so we approximate
 /// using process memory from sysinfo
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_memory() -> i64 {
     let mut system = System::new_all();
     system.refresh_memory();
@@ -91,7 +91,7 @@ pub extern "C" fn otter_runtime_memory() -> i64 {
 
 /// Trigger garbage collection
 /// Returns the number of bytes freed
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_collect_garbage() -> i64 {
     let gc = get_gc();
     let stats = gc.collect();
@@ -99,21 +99,21 @@ pub extern "C" fn otter_runtime_collect_garbage() -> i64 {
 }
 
 /// Start memory profiling
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_memory_profiler_start() {
     let profiler = get_profiler();
     profiler.start();
 }
 
 /// Stop memory profiling
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_memory_profiler_stop() {
     let profiler = get_profiler();
     profiler.stop();
 }
 
 /// Get memory profiling statistics as JSON
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_memory_profiler_stats() -> *mut c_char {
     let profiler = get_profiler();
     let stats = profiler.get_stats();
@@ -139,7 +139,7 @@ pub extern "C" fn otter_runtime_memory_profiler_stats() -> *mut c_char {
 }
 
 /// Detect memory leaks and return as JSON
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_memory_profiler_leaks() -> *mut c_char {
     let profiler = get_profiler();
     let leaks = profiler.detect_leaks();
@@ -155,7 +155,7 @@ pub extern "C" fn otter_runtime_memory_profiler_leaks() -> *mut c_char {
 
 /// Set garbage collection strategy
 /// strategy: "rc", "mark-sweep", "hybrid", or "none"
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_runtime_set_gc_strategy(strategy: *const c_char) -> i32 {
     if strategy.is_null() {
         return 0;
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn otter_runtime_set_gc_strategy(strategy: *const c_char) 
 
 /// Get runtime statistics as a JSON string
 /// Returns a JSON object with various runtime metrics
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_stats() -> *mut c_char {
     let stats = RUNTIME_STATS.read();
 
@@ -216,7 +216,7 @@ pub extern "C" fn otter_runtime_stats() -> *mut c_char {
 /// Get detailed task runtime state as JSON
 /// Returns comprehensive information about tasks, workers, and queues
 #[cfg(feature = "task-runtime")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_tasks() -> *mut c_char {
     if let Some(metrics) = task_metrics_clone() {
         let snapshot = metrics.snapshot();
@@ -265,7 +265,7 @@ pub extern "C" fn otter_runtime_tasks() -> *mut c_char {
 }
 
 /// Get OtterLang runtime version
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_runtime_version() -> *mut c_char {
     CString::new(VERSION)
         .ok()
@@ -274,7 +274,7 @@ pub extern "C" fn otter_runtime_version() -> *mut c_char {
 }
 
 /// Free a string returned by runtime functions
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_runtime_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;

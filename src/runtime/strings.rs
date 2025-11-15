@@ -4,7 +4,7 @@ use std::os::raw::c_char;
 use crate::runtime::symbol_registry::{FfiFunction, FfiSignature, FfiType, SymbolRegistry};
 
 /// Format a float value to string
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_format_float(value: f64) -> *mut c_char {
     let formatted = format!("{:.9}", value)
         .trim_end_matches('0')
@@ -16,7 +16,7 @@ pub extern "C" fn otter_format_float(value: f64) -> *mut c_char {
 }
 
 /// Format an integer value to string
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_format_int(value: i64) -> *mut c_char {
     let formatted = format!("{}", value);
     CString::new(formatted)
@@ -25,7 +25,7 @@ pub extern "C" fn otter_format_int(value: i64) -> *mut c_char {
 }
 
 /// Format a boolean value to string
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_format_bool(value: bool) -> *mut c_char {
     let formatted = if value { "true" } else { "false" };
     CString::new(formatted)
@@ -34,7 +34,7 @@ pub extern "C" fn otter_format_bool(value: bool) -> *mut c_char {
 }
 
 /// Concatenate two strings
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_concat_strings(s1: *const c_char, s2: *const c_char) -> *mut c_char {
     if s1.is_null() || s2.is_null() {
         return std::ptr::null_mut();
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn otter_concat_strings(s1: *const c_char, s2: *const c_ch
 }
 
 /// Free a string allocated by Otter runtime
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
@@ -69,7 +69,7 @@ pub unsafe extern "C" fn otter_free_string(ptr: *mut c_char) {
 }
 
 /// Validate UTF-8 string (returns 1 if valid, 0 if invalid)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_validate_utf8(ptr: *const c_char) -> i32 {
     if ptr.is_null() {
         return 0;
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn otter_validate_utf8(ptr: *const c_char) -> i32 {
 }
 
 /// Create a string from a string literal (makes a copy)
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_string_from_literal(ptr: *const c_char) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();

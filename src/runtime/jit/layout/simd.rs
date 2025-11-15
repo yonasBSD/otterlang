@@ -83,7 +83,7 @@ impl SimdOpportunityDetector {
         // Filter fields that are accessed frequently and have size compatible with SIMD
         field_access_counts
             .iter()
-            .filter(|(_, &count)| count > 10) // Minimum access threshold
+            .filter(|(_, count)| **count > 10) // Minimum access threshold
             .filter_map(|(field_id, _)| {
                 // Check if field size is compatible with SIMD
                 if let Some(pattern) = patterns.iter().find(|p| p.field_id == Some(*field_id)) {

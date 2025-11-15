@@ -26,7 +26,7 @@ fn normalize_json(text: &str) -> Option<String> {
         .and_then(|value| serde_json::to_string(&value).ok())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_json_encode(obj: *const c_char) -> *mut c_char {
     if let Some(text) = read_c_string(obj) {
         normalize_json(&text).map_or(std::ptr::null_mut(), into_c_string)
@@ -35,7 +35,7 @@ pub extern "C" fn otter_std_json_encode(obj: *const c_char) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_json_decode(json_str: *const c_char) -> *mut c_char {
     if let Some(text) = read_c_string(json_str) {
         normalize_json(&text).map_or(std::ptr::null_mut(), into_c_string)
@@ -44,7 +44,7 @@ pub extern "C" fn otter_std_json_decode(json_str: *const c_char) -> *mut c_char 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_json_pretty(json_str: *const c_char) -> *mut c_char {
     read_c_string(json_str)
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -52,7 +52,7 @@ pub extern "C" fn otter_std_json_pretty(json_str: *const c_char) -> *mut c_char 
         .map_or(std::ptr::null_mut(), into_c_string)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_json_validate(json_str: *const c_char) -> bool {
     read_c_string(json_str)
         .map(|text| serde_json::from_str::<Value>(&text).is_ok())

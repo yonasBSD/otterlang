@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use once_cell::sync::Lazy;
@@ -134,7 +134,7 @@ thread_local! {
 // len(x) - Get length of string, list, or map
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_len_string(s: *const c_char) -> i64 {
     if s.is_null() {
         return 0;
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn otter_builtin_len_string(s: *const c_char) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_len_list(handle: u64) -> i64 {
     let lists = LISTS.read();
     if let Some(list) = lists.get(&handle) {
@@ -158,7 +158,7 @@ pub extern "C" fn otter_builtin_len_list(handle: u64) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_len_map(handle: u64) -> i64 {
     let maps = MAPS.read();
     if let Some(map) = maps.get(&handle) {
@@ -172,7 +172,7 @@ pub extern "C" fn otter_builtin_len_map(handle: u64) -> i64 {
 // cap(x) - Get capacity of a list
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_cap_list(handle: u64) -> i64 {
     let lists = LISTS.read();
     if let Some(list) = lists.get(&handle) {
@@ -182,7 +182,7 @@ pub extern "C" fn otter_builtin_cap_list(handle: u64) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_cap_string(s: *const c_char) -> i64 {
     if s.is_null() {
         return 0;
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn otter_builtin_cap_string(s: *const c_char) -> i64 {
 // str.contains(substring) - Check if string contains substring
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_str_contains(
     s: *const c_char,
     substring: *const c_char,
@@ -225,7 +225,7 @@ pub unsafe extern "C" fn otter_builtin_str_contains(
 // append(x, val) - Append to a list
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_append_list_string(handle: u64, val: *const c_char) -> i32 {
     if val.is_null() {
         return 0;
@@ -242,7 +242,7 @@ pub unsafe extern "C" fn otter_builtin_append_list_string(handle: u64, val: *con
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_append_list_int(handle: u64, val: i64) -> i32 {
     let mut lists = LISTS.write();
     if let Some(list) = lists.get_mut(&handle) {
@@ -253,7 +253,7 @@ pub extern "C" fn otter_builtin_append_list_int(handle: u64, val: i64) -> i32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_append_list_float(handle: u64, val: f64) -> i32 {
     let mut lists = LISTS.write();
     if let Some(list) = lists.get_mut(&handle) {
@@ -264,7 +264,7 @@ pub extern "C" fn otter_builtin_append_list_float(handle: u64, val: f64) -> i32 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_append_list_bool(handle: u64, val: bool) -> i32 {
     let mut lists = LISTS.write();
     if let Some(list) = lists.get_mut(&handle) {
@@ -275,7 +275,7 @@ pub extern "C" fn otter_builtin_append_list_bool(handle: u64, val: bool) -> i32 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_append_list_list(handle: u64, value_handle: u64) -> i32 {
     let mut lists = LISTS.write();
     if let Some(list) = lists.get_mut(&handle) {
@@ -286,7 +286,7 @@ pub extern "C" fn otter_builtin_append_list_list(handle: u64, value_handle: u64)
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_append_list_map(handle: u64, value_handle: u64) -> i32 {
     let mut lists = LISTS.write();
     if let Some(list) = lists.get_mut(&handle) {
@@ -301,7 +301,7 @@ pub extern "C" fn otter_builtin_append_list_map(handle: u64, value_handle: u64) 
 // delete(map, key) - Delete a key from a map
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_delete_map(handle: u64, key: *const c_char) -> i32 {
     if key.is_null() {
         return 0;
@@ -325,7 +325,7 @@ pub unsafe extern "C" fn otter_builtin_delete_map(handle: u64, key: *const c_cha
 // range(start, end) - Generate a range (returns list handle)
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_range_int(start: i64, end: i64) -> u64 {
     let id = next_handle_id();
     let mut items = Vec::new();
@@ -341,7 +341,7 @@ pub extern "C" fn otter_builtin_range_int(start: i64, end: i64) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_range_float(start: f64, end: f64) -> u64 {
     let id = next_handle_id();
     let mut items = Vec::new();
@@ -364,7 +364,7 @@ pub extern "C" fn otter_builtin_range_float(start: f64, end: f64) -> u64 {
 // Returns a new list handle with "index:value" format
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_enumerate_list(handle: u64) -> u64 {
     let lists = LISTS.read();
     let id = next_handle_id();
@@ -394,7 +394,7 @@ pub extern "C" fn otter_builtin_enumerate_list(handle: u64) -> u64 {
 // Helper functions for list/map creation
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_new() -> u64 {
     let id = next_handle_id();
     let list = List { items: Vec::new() };
@@ -402,7 +402,7 @@ pub extern "C" fn otter_builtin_list_new() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_map_new() -> u64 {
     let id = next_handle_id();
     let map = Map {
@@ -412,7 +412,7 @@ pub extern "C" fn otter_builtin_map_new() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_get(handle: u64, index: i64) -> *mut c_char {
     match list_value(handle, index) {
         Some(value) => CString::new(value_to_string(&value))
@@ -423,7 +423,7 @@ pub extern "C" fn otter_builtin_list_get(handle: u64, index: i64) -> *mut c_char
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_get(handle: u64, key: *const c_char) -> *mut c_char {
     if key.is_null() {
         return std::ptr::null_mut();
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn otter_builtin_map_get(handle: u64, key: *const c_char) 
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_get_int(handle: u64, index: i64) -> i64 {
     match list_value(handle, index) {
         Some(Value::I64(i)) => i,
@@ -456,7 +456,7 @@ pub extern "C" fn otter_builtin_list_get_int(handle: u64, index: i64) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_get_float(handle: u64, index: i64) -> f64 {
     match list_value(handle, index) {
         Some(Value::F64(f)) => f,
@@ -472,7 +472,7 @@ pub extern "C" fn otter_builtin_list_get_float(handle: u64, index: i64) -> f64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_get_bool(handle: u64, index: i64) -> bool {
     match list_value(handle, index) {
         Some(Value::Bool(b)) => b,
@@ -482,7 +482,7 @@ pub extern "C" fn otter_builtin_list_get_bool(handle: u64, index: i64) -> bool {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_get_list(handle: u64, index: i64) -> u64 {
     match list_value(handle, index) {
         Some(Value::List(inner)) => inner,
@@ -490,7 +490,7 @@ pub extern "C" fn otter_builtin_list_get_list(handle: u64, index: i64) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_list_get_map(handle: u64, index: i64) -> u64 {
     match list_value(handle, index) {
         Some(Value::Map(inner)) => inner,
@@ -498,7 +498,7 @@ pub extern "C" fn otter_builtin_list_get_map(handle: u64, index: i64) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_set(
     handle: u64,
     key: *const c_char,
@@ -521,7 +521,7 @@ pub unsafe extern "C" fn otter_builtin_map_set(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_get_int(handle: u64, key: *const c_char) -> i64 {
     if key.is_null() {
         return 0;
@@ -541,7 +541,7 @@ pub unsafe extern "C" fn otter_builtin_map_get_int(handle: u64, key: *const c_ch
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_get_float(handle: u64, key: *const c_char) -> f64 {
     if key.is_null() {
         return 0.0;
@@ -561,7 +561,7 @@ pub unsafe extern "C" fn otter_builtin_map_get_float(handle: u64, key: *const c_
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_get_bool(handle: u64, key: *const c_char) -> bool {
     if key.is_null() {
         return false;
@@ -575,7 +575,7 @@ pub unsafe extern "C" fn otter_builtin_map_get_bool(handle: u64, key: *const c_c
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_get_list(handle: u64, key: *const c_char) -> u64 {
     if key.is_null() {
         return 0;
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn otter_builtin_map_get_list(handle: u64, key: *const c_c
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_get_map(handle: u64, key: *const c_char) -> u64 {
     if key.is_null() {
         return 0;
@@ -599,7 +599,7 @@ pub unsafe extern "C" fn otter_builtin_map_get_map(handle: u64, key: *const c_ch
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_set_int(
     handle: u64,
     key: *const c_char,
@@ -620,7 +620,7 @@ pub unsafe extern "C" fn otter_builtin_map_set_int(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_set_float(
     handle: u64,
     key: *const c_char,
@@ -641,7 +641,7 @@ pub unsafe extern "C" fn otter_builtin_map_set_float(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_set_bool(
     handle: u64,
     key: *const c_char,
@@ -662,7 +662,7 @@ pub unsafe extern "C" fn otter_builtin_map_set_bool(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_set_list(
     handle: u64,
     key: *const c_char,
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn otter_builtin_map_set_list(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_map_set_map(
     handle: u64,
     key: *const c_char,
@@ -708,7 +708,7 @@ pub unsafe extern "C" fn otter_builtin_map_set_map(
 // panic(msg) - Terminate execution with error message
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_panic(msg: *const c_char) {
     let message = if msg.is_null() {
         "panic: unknown error".to_string()
@@ -735,7 +735,7 @@ pub unsafe extern "C" fn otter_builtin_panic(msg: *const c_char) {
 // Returns the panic message if recovering, null otherwise
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_recover() -> *mut c_char {
     PANIC_STATE.with(|state| {
         if let Some(ref msg) = *state.borrow() {
@@ -766,7 +766,7 @@ static TRY_RESULTS: Lazy<RwLock<std::collections::HashMap<HandleId, TryResult>>>
 // Function pointer type for try
 type TryFn = extern "C" fn() -> *mut c_char;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_try(callback: TryFn) -> u64 {
     let id = next_handle_id();
 
@@ -850,7 +850,7 @@ pub extern "C" fn otter_builtin_try(callback: TryFn) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_try_result(handle: u64) -> *mut c_char {
     let try_results = TRY_RESULTS.read();
     if let Some(try_result) = try_results.get(&handle) {
@@ -867,7 +867,7 @@ pub extern "C" fn otter_builtin_try_result(handle: u64) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_try_error(handle: u64) -> u64 {
     let try_results = TRY_RESULTS.read();
     if let Some(try_result) = try_results.get(&handle) {
@@ -877,7 +877,7 @@ pub extern "C" fn otter_builtin_try_error(handle: u64) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_error_message(error_handle: u64) -> *mut c_char {
     let errors = ERRORS.read();
     if let Some(error) = errors.get(&error_handle) {
@@ -896,7 +896,7 @@ pub extern "C" fn otter_builtin_error_message(error_handle: u64) -> *mut c_char 
 
 type DeferFn = extern "C" fn();
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_defer(callback: DeferFn) {
     DEFER_STACK.with(|stack| {
         stack.borrow_mut().push(callback);
@@ -905,7 +905,7 @@ pub extern "C" fn otter_builtin_defer(callback: DeferFn) {
 
 /// Execute all deferred functions (called at scope exit)
 /// This should be called by the compiler-generated code
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_run_defers() {
     DEFER_STACK.with(|stack| {
         let mut stack_ref = stack.borrow_mut();
@@ -919,7 +919,7 @@ pub extern "C" fn otter_builtin_run_defers() {
 // type_of(x) - Get type of a value as string
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_string(_s: *const c_char) -> *mut c_char {
     CString::new("string")
         .ok()
@@ -927,7 +927,7 @@ pub extern "C" fn otter_builtin_type_of_string(_s: *const c_char) -> *mut c_char
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_int(_i: i64) -> *mut c_char {
     CString::new("int")
         .ok()
@@ -935,7 +935,7 @@ pub extern "C" fn otter_builtin_type_of_int(_i: i64) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_float(_f: f64) -> *mut c_char {
     CString::new("float")
         .ok()
@@ -943,7 +943,7 @@ pub extern "C" fn otter_builtin_type_of_float(_f: f64) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_bool(_b: bool) -> *mut c_char {
     CString::new("bool")
         .ok()
@@ -951,7 +951,7 @@ pub extern "C" fn otter_builtin_type_of_bool(_b: bool) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_list(_handle: u64) -> *mut c_char {
     CString::new("list")
         .ok()
@@ -959,7 +959,7 @@ pub extern "C" fn otter_builtin_type_of_list(_handle: u64) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_map(_handle: u64) -> *mut c_char {
     CString::new("map")
         .ok()
@@ -967,7 +967,7 @@ pub extern "C" fn otter_builtin_type_of_map(_handle: u64) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_type_of_opaque(_handle: u64) -> *mut c_char {
     CString::new("opaque")
         .ok()
@@ -980,7 +980,7 @@ pub extern "C" fn otter_builtin_type_of_opaque(_handle: u64) -> *mut c_char {
 // For now, we'll return a JSON string with field information
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_fields(_obj: u64) -> *mut c_char {
     // For now, return empty JSON object
     // Future: track struct definitions and return field list
@@ -994,7 +994,7 @@ pub extern "C" fn otter_builtin_fields(_obj: u64) -> *mut c_char {
 // stringify(x) - Convert value to string
 // ============================================================================
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_stringify_int(value: i64) -> *mut c_char {
     CString::new(value.to_string())
         .ok()
@@ -1002,7 +1002,7 @@ pub extern "C" fn otter_builtin_stringify_int(value: i64) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_stringify_float(value: f64) -> *mut c_char {
     CString::new(value.to_string())
         .ok()
@@ -1010,7 +1010,7 @@ pub extern "C" fn otter_builtin_stringify_float(value: f64) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_stringify_bool(value: bool) -> *mut c_char {
     CString::new(if value { "true" } else { "false" })
         .ok()
@@ -1018,7 +1018,7 @@ pub extern "C" fn otter_builtin_stringify_bool(value: bool) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_stringify_string(s: *const c_char) -> *mut c_char {
     if s.is_null() {
         return std::ptr::null_mut();
@@ -1035,7 +1035,7 @@ pub unsafe extern "C" fn otter_builtin_stringify_string(s: *const c_char) -> *mu
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_stringify_list(handle: u64) -> *mut c_char {
     let lists = LISTS.read();
     if let Some(list) = lists.get(&handle) {
@@ -1057,7 +1057,7 @@ pub extern "C" fn otter_builtin_stringify_list(handle: u64) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_builtin_stringify_map(handle: u64) -> *mut c_char {
     let maps = MAPS.read();
     if let Some(map) = maps.get(&handle) {
@@ -1091,7 +1091,7 @@ pub struct SelectCase {
     value: *const c_char, // For send operations
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_select_case_create(
     channel: u64,
     is_send: bool,
@@ -1105,14 +1105,18 @@ pub unsafe extern "C" fn otter_builtin_select_case_create(
     Box::into_raw(case)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_select_case_free(case: *mut SelectCase) {
     if !case.is_null() {
-        drop(Box::from_raw(case));
+        // Safety:
+        // `SelectCase` is
+        //  * Only freed by this function;
+        //  * only created using the global allocator;
+        unsafe { Box::from_raw(case) };
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_builtin_select(
     cases: *const SelectCase,
     num_cases: i64,

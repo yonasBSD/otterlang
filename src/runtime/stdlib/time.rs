@@ -43,7 +43,7 @@ static TIMES: Lazy<RwLock<std::collections::HashMap<HandleId, Time>>> =
 static DURATIONS: Lazy<RwLock<std::collections::HashMap<HandleId, DurationHandle>>> =
     Lazy::new(|| RwLock::new(std::collections::HashMap::new()));
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_now() -> u64 {
     let id = next_handle_id();
     let now = chrono::Utc::now().timestamp_millis();
@@ -52,12 +52,12 @@ pub extern "C" fn otter_std_time_now() -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_sleep_ms(milliseconds: i64) {
     if milliseconds <= 0 {
         return;
@@ -124,7 +124,7 @@ fn create_condvar_waker(pair: Arc<(Mutex<bool>, Condvar)>) -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(pair_ptr as *const (), &VTABLE)) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_since(t: u64) -> u64 {
     let times = TIMES.read();
     if let Some(start_time) = times.get(&t) {
@@ -141,7 +141,7 @@ pub extern "C" fn otter_std_time_since(t: u64) -> u64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_time_format(t: u64, fmt: *const c_char) -> *mut c_char {
     if fmt.is_null() {
         return std::ptr::null_mut();
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn otter_std_time_format(t: u64, fmt: *const c_char) -> *m
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn otter_std_time_parse(fmt: *const c_char, text: *const c_char) -> u64 {
     if fmt.is_null() || text.is_null() {
         return 0;
@@ -198,7 +198,7 @@ pub unsafe extern "C" fn otter_std_time_parse(fmt: *const c_char, text: *const c
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_tick(ms: i64) -> u64 {
     let id = next_handle_id();
     let time = Time { epoch_ms: ms };
@@ -206,7 +206,7 @@ pub extern "C" fn otter_std_time_tick(ms: i64) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_after(ms: i64) -> u64 {
     let id = next_handle_id();
     let now = chrono::Utc::now().timestamp_millis();
@@ -215,7 +215,7 @@ pub extern "C" fn otter_std_time_after(ms: i64) -> u64 {
     id
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_time_epoch_ms(t: u64) -> i64 {
     let times = TIMES.read();
     if let Some(time) = times.get(&t) {
@@ -225,7 +225,7 @@ pub extern "C" fn otter_std_time_epoch_ms(t: u64) -> i64 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_duration_ms(d: u64) -> i64 {
     let durations = DURATIONS.read();
     if let Some(duration) = durations.get(&d) {

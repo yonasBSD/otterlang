@@ -4,35 +4,37 @@ use sysinfo::System;
 
 use crate::runtime::symbol_registry::{FfiFunction, FfiSignature, FfiType, SymbolRegistry};
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_sys_cores() -> i64 {
     let mut system = System::new_all();
     system.refresh_cpu();
     system.cpus().len() as i64
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_sys_total_memory_bytes() -> i64 {
     let mut system = System::new_all();
     system.refresh_memory();
     (system.total_memory() * 1024) as i64
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_sys_available_memory_bytes() -> i64 {
     let mut system = System::new_all();
     system.refresh_memory();
     (system.available_memory() * 1024) as i64
 }
 
-#[no_mangle]
-pub extern "C" fn otter_std_sys_getenv(name: *const c_char) -> *mut c_char {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn otter_std_sys_getenv(name: *const c_char) -> *mut c_char {
     if name.is_null() {
         return std::ptr::null_mut();
     }
-    
-    let name_str = unsafe { CStr::from_ptr(name) }.to_string_lossy().to_string();
-    
+
+    let name_str = unsafe { CStr::from_ptr(name) }
+        .to_string_lossy()
+        .to_string();
+
     if let Ok(value) = std::env::var(&name_str) {
         CString::new(value)
             .ok()
@@ -43,7 +45,7 @@ pub extern "C" fn otter_std_sys_getenv(name: *const c_char) -> *mut c_char {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn otter_std_sys_exit(code: i32) {
     std::process::exit(code);
 }
