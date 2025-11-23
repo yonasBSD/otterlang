@@ -937,6 +937,12 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                 // Execute try body
                 self.builder.position_at_end(try_bb);
                 for stmt in &body.as_ref().statements {
+                    // Stop processing if current block already has a terminator (e.g., from raise)
+                    if let Some(current_block) = self.builder.get_insert_block() {
+                        if current_block.get_terminator().is_some() {
+                            break;
+                        }
+                    }
                     self.lower_statement(stmt.as_ref(), _function, ctx)?;
                 }
 
@@ -1199,13 +1205,6 @@ impl<'ctx, 'types> Compiler<'ctx, 'types> {
                 self.builder
                     .build_unreachable()
                     .expect("unreachable after raise");
-                let unreachable_bb = self
-                    .context
-                    .append_basic_block(_function, "unreachable_after_raise");
-                self.builder.position_at_end(unreachable_bb);
-                self.builder
-                    .build_unreachable()
-                    .expect("unreachable block terminator");
 
                 Ok(())
             }
