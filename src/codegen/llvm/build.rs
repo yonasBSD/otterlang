@@ -137,11 +137,19 @@ pub fn build_executable(
     } else {
         RelocMode::Default
     };
+    
+    // For macOS, specify CPU and features to ensure proper platform metadata
+    let (cpu, features) = if runtime_triple.os == "darwin" {
+        ("generic", "+sse,+sse2,+sse3,+ssse3")
+    } else {
+        ("generic", "")
+    };
+    
     let target_machine = target
         .create_target_machine(
             &llvm_triple,
-            "generic",
-            "",
+            cpu,
+            features,
             optimization,
             reloc_mode,
             CodeModel::Default,
@@ -151,6 +159,8 @@ pub fn build_executable(
     compiler
         .module
         .set_data_layout(&target_machine.get_target_data().get_data_layout());
+
+
 
     compiler.run_default_passes(
         options.opt_level,
@@ -196,6 +206,12 @@ pub fn build_executable(
         if runtime_triple.needs_pic() && !runtime_triple.is_windows() {
             cc.arg("-fPIC");
         }
+        
+        // Add macOS version minimum
+        if runtime_triple.os == "darwin" {
+            cc.arg("-mmacosx-version-min=10.15");
+        }
+        
         // Add target triple for cross-compilation (skip for native target)
         if !is_native_target {
             let compiler_target_flag = preferred_target_flag(&c_compiler);
@@ -236,6 +252,12 @@ pub fn build_executable(
             let linker_target_flag = preferred_target_flag(&linker);
             cc.arg(linker_target_flag).arg(&triple_str);
         }
+        
+        // Add macOS version minimum to avoid platform load command warning
+        if runtime_triple.os == "darwin" {
+            cc.arg("-mmacosx-version-min=10.15");
+        }
+        
         if let Some(ref rt_o) = runtime_o {
             cc.arg(&object_path).arg(rt_o).arg("-o").arg(output);
         } else {
@@ -359,11 +381,19 @@ pub fn build_shared_library(
 
     let optimization: OptimizationLevel = options.opt_level.into();
     let reloc_mode = RelocMode::PIC;
+
+    // For macOS, specify CPU and features to ensure proper platform metadata
+    let (cpu, features) = if runtime_triple.os == "darwin" {
+        ("generic", "+sse,+sse2,+sse3,+ssse3")
+    } else {
+        ("generic", "")
+    };
+
     let target_machine = target
         .create_target_machine(
             &llvm_triple,
-            "generic",
-            "",
+            cpu,
+            features,
             optimization,
             reloc_mode,
             CodeModel::Default,
@@ -419,6 +449,12 @@ pub fn build_shared_library(
         if runtime_triple.needs_pic() && !runtime_triple.is_windows() {
             cc.arg("-fPIC");
         }
+        
+        // Add macOS version minimum
+        if runtime_triple.os == "darwin" {
+            cc.arg("-mmacosx-version-min=10.15");
+        }
+        
         let compiler_target_flag = preferred_target_flag(&c_compiler);
         cc.arg(compiler_target_flag).arg(&triple_str);
 
@@ -471,6 +507,12 @@ pub fn build_shared_library(
             cc.arg("-fPIC");
         }
         cc.arg(linker_target_flag).arg(&triple_str);
+        
+        // Add macOS version minimum to avoid platform load command warning
+        if runtime_triple.os == "darwin" {
+            cc.arg("-mmacosx-version-min=10.15");
+        }
+        
         cc.arg("-o").arg(&lib_path).arg(&object_path);
         if let Some(ref rt_o) = runtime_o {
             cc.arg(rt_o);

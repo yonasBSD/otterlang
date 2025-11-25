@@ -759,13 +759,9 @@ impl<'ctx> Compiler<'ctx> {
             // Look up the runtime throw function
             if let Some(throw_fn) = self.declared_functions.get("__otter_throw") {
                 if let Some(exc_val) = exception_val.value {
-                    // Call the throw function with the exception message
                     self.builder
                         .build_call(*throw_fn, &[exc_val.into()], "throw")?;
                 }
-            } else {
-                // Fallback: if runtime not available, just print error
-                eprintln!("Warning: Exception runtime not available, using unreachable");
             }
         }
 

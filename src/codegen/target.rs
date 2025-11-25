@@ -13,6 +13,8 @@ pub struct TargetTriple {
     pub vendor: String,
     /// Operating system (e.g., linux, darwin, windows, none, wasi)
     pub os: String,
+    /// OS version suffix (e.g., 19.6.0 for darwin)
+    pub os_version: Option<String>,
     /// ABI/environment (e.g., gnu, msvc, eabi, elf)
     pub env: Option<String>,
 }
@@ -29,6 +31,7 @@ impl TargetTriple {
             arch: arch.into(),
             vendor: vendor.into(),
             os: os.into(),
+            os_version: None,
             env: env.map(|e| e.into()),
         }
     }
@@ -59,11 +62,17 @@ impl TargetTriple {
             }
         }
 
-        let (os_base, _os_suffix) = raw_os.split_at(split_index);
+        let (os_base, os_suffix) = raw_os.split_at(split_index);
         let os = if os_base.is_empty() {
             raw_os.to_string()
         } else {
             os_base.to_string()
+        };
+        
+        let os_version = if !os_suffix.is_empty() {
+            Some(os_suffix.to_string())
+        } else {
+            None
         };
 
         // Only include parts[3..] as env (e.g., "gnu", "musl", "eabi")
@@ -84,15 +93,22 @@ impl TargetTriple {
             arch,
             vendor,
             os,
+            os_version,
             env,
         })
     }
 
     /// Convert to LLVM target triple string
     pub fn to_llvm_triple(&self) -> String {
+        let os_part = if let Some(ver) = &self.os_version {
+            format!("{}{}", self.os, ver)
+        } else {
+            self.os.clone()
+        };
+
         match &self.env {
-            Some(env) => format!("{}-{}-{}-{}", self.arch, self.vendor, self.os, env),
-            None => format!("{}-{}-{}", self.arch, self.vendor, self.os),
+            Some(env) => format!("{}-{}-{}-{}", self.arch, self.vendor, os_part, env),
+            None => format!("{}-{}-{}", self.arch, self.vendor, os_part),
         }
     }
 
