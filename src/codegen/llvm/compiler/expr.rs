@@ -422,6 +422,39 @@ impl<'ctx> Compiler<'ctx> {
             return self.build_string_concat(lhs, rhs);
         }
 
+        if lhs.ty == OtterType::Str && rhs.ty == OtterType::Str {
+            return match op {
+                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
+                    let is_equal = self.build_equality_check(&lhs, &rhs)?;
+                    match op {
+                        BinaryOp::Eq => Ok(EvaluatedValue::with_value(is_equal.into(), OtterType::Bool)),
+                        BinaryOp::Ne => {
+                            let not_equal = self.builder.build_not(is_equal, "ne")?;
+                            Ok(EvaluatedValue::with_value(not_equal.into(), OtterType::Bool))
+                        }
+                        _ => {
+                            let cmp_fn = self.get_or_declare_ffi_function("std.strings.compare")?;
+                            let left_ptr = self.ensure_string_value(lhs.clone())?;
+                            let right_ptr = self.ensure_string_value(rhs.clone())?;
+                            let cmp_result = self.builder.build_call(cmp_fn, &[left_ptr.into(), right_ptr.into()], "strcmp")?
+                                .try_as_basic_value().left().unwrap().into_int_value();
+                            let zero = self.context.i64_type().const_zero();
+                            
+                            let result = match op {
+                                BinaryOp::Lt => self.builder.build_int_compare(IntPredicate::SLT, cmp_result, zero, "lt")?,
+                                BinaryOp::Gt => self.builder.build_int_compare(IntPredicate::SGT, cmp_result, zero, "gt")?,
+                                BinaryOp::LtEq => self.builder.build_int_compare(IntPredicate::SLE, cmp_result, zero, "le")?,
+                                BinaryOp::GtEq => self.builder.build_int_compare(IntPredicate::SGE, cmp_result, zero, "ge")?,
+                                _ => unreachable!(),
+                            };
+                            Ok(EvaluatedValue::with_value(result.into(), OtterType::Bool))
+                        }
+                    }
+                }
+                _ => bail!("Unsupported binary operation for strings: {:?}", op),
+            };
+        }
+
         // Coerce types if needed - promote to F64 if either operand is F64
         let (lhs_val, rhs_val, result_ty) = if lhs.ty == OtterType::F64 || rhs.ty == OtterType::F64
         {
@@ -450,7 +483,6 @@ impl<'ctx> Compiler<'ctx> {
         } else if lhs.ty == OtterType::I64 && rhs.ty == OtterType::I64 {
             (lhs.value.unwrap(), rhs.value.unwrap(), OtterType::I64)
         } else if lhs.ty == OtterType::Bool && rhs.ty == OtterType::Bool {
-            // Handle bool comparisons
             (lhs.value.unwrap(), rhs.value.unwrap(), OtterType::Bool)
         } else {
             bail!(

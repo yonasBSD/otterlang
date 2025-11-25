@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -21,6 +21,60 @@ use super::config::{
 pub fn current_llvm_version() -> String {
     "15.0".to_string()
 }
+
+/// Build the Rust runtime as a static library
+fn ensure_runtime_library() -> Result<PathBuf> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let runtime_lib_dir = Path::new(&manifest_dir).join("target").join("runtime");
+    let runtime_lib = runtime_lib_dir.join("libotterlang_runtime.a");
+
+    // Check if library already exists and is up-to-date
+    if runtime_lib.exists() {
+        // For now, assume it's up-to-date. In production, we'd check timestamps
+        return Ok(runtime_lib);
+    }
+
+    // Create runtime library directory
+    fs::create_dir_all(&runtime_lib_dir)
+        .context("failed to create runtime library directory")?;
+
+    // Build the runtime as a static library
+    let status = Command::new("cargo")
+        .args(&[
+            "rustc",
+            "--release",
+            "--lib",
+            "--crate-type=staticlib",
+            "--target-dir",
+            runtime_lib_dir.to_str().unwrap(),
+        ])
+        .status()
+        .context("failed to build runtime static library")?;
+
+    if !status.success() {
+        bail!("failed to build runtime static library");
+    }
+
+    // Find the generated library (it will be in target/runtime/release/)
+    let release_dir = runtime_lib_dir.join("release");
+    let generated_lib = if cfg!(target_os = "windows") {
+        release_dir.join("otterlang.lib")
+    } else {
+        release_dir.join("libotterlang.a")
+    };
+
+    if !generated_lib.exists() {
+        bail!("runtime library was not generated at expected location: {}", generated_lib.display());
+    }
+
+    // Copy to expected location
+    fs::copy(&generated_lib, &runtime_lib)
+        .context("failed to copy runtime library")?;
+
+    Ok(runtime_lib)
+}
+
 
 pub fn build_executable(
     program: &Program,
@@ -222,6 +276,10 @@ pub fn build_executable(
     for lib in &bridge_libraries {
         cc.arg(lib);
     }
+
+    // Build and link the runtime static library
+    let runtime_lib = ensure_runtime_library()?;
+    cc.arg(&runtime_lib);
 
     let status = cc.status().context("failed to invoke system linker (cc)")?;
 
@@ -452,6 +510,10 @@ pub fn build_shared_library(
     for lib in &bridge_libraries {
         cc.arg(lib);
     }
+
+    // Build and link the runtime static library
+    let runtime_lib = ensure_runtime_library()?;
+    cc.arg(&runtime_lib);
 
     let status = cc.status().context("failed to invoke system linker (cc)")?;
 
