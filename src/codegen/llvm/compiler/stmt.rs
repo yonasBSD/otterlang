@@ -59,8 +59,11 @@ impl<'ctx> Compiler<'ctx> {
                 let val = self.eval_expr(expr.as_ref(), ctx)?;
 
                 // Skip allocation for Unit types
-                if let Some(basic_ty) = self.basic_type(val.ty)? {
-                    let alloca = self.builder.build_alloca(basic_ty, name.as_ref())?;
+                if let Some(_basic_ty) = self.basic_type(val.ty)? {
+                    // Use create_entry_block_alloca to ensure alloca is in the entry block
+                    // This prevents stack overflow in loops and ensures dominance
+                    let function = self.builder.get_insert_block().unwrap().get_parent().unwrap();
+                    let alloca = self.create_entry_block_alloca(function, name.as_ref(), val.ty)?;
                     if let Some(v) = val.value {
                         self.builder.build_store(alloca, v)?;
                     }
@@ -342,10 +345,10 @@ impl<'ctx> Compiler<'ctx> {
                 .unwrap();
 
             // Create loop variable
-            let loop_var_alloca = self.builder.build_alloca(
-                self.basic_type(start_val.ty)?
-                    .ok_or_else(|| anyhow::anyhow!("Cannot iterate over unit type"))?,
+            let loop_var_alloca = self.create_entry_block_alloca(
+                function,
                 var,
+                start_val.ty,
             )?;
 
             ctx.insert(
@@ -552,10 +555,10 @@ impl<'ctx> Compiler<'ctx> {
             .into_pointer_value();
 
         // Create loop variable allocation
-        let var_alloca = self.builder.build_alloca(
-            self.basic_type(element_type)?
-                .ok_or_else(|| anyhow::anyhow!("Cannot iterate over unit type"))?,
+        let var_alloca = self.create_entry_block_alloca(
+            function,
             var,
+            element_type,
         )?;
 
         // Insert variable into context
@@ -678,11 +681,17 @@ impl<'ctx> Compiler<'ctx> {
         // Exception handlers
         self.builder.position_at_end(handlers_bb);
         if !handlers.is_empty() {
+            // Branch to the first handler
+            let first_handler_bb = self.context.append_basic_block(function, "handler_0");
+            self.builder.build_unconditional_branch(first_handler_bb)?;
+             
             // For each handler, create a block and check exception type
             for (i, handler) in handlers.iter().enumerate() {
-                let handler_bb = self
-                    .context
-                    .append_basic_block(function, &format!("handler_{}", i));
+                let handler_bb = if i == 0 {
+                    first_handler_bb
+                } else {
+                    self.context.append_basic_block(function, &format!("handler_{}", i))
+                };
                 let next_handler_bb = if i < handlers.len() - 1 {
                     self.context
                         .append_basic_block(function, &format!("handler_check_{}", i + 1))
