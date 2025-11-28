@@ -56,6 +56,7 @@ impl TypeChecker {
             true,
         );
         context.define_type_alias("Error".to_string(), TypeInfo::Error, true);
+        context.define_type_alias("string".to_string(), TypeInfo::Str, true);
 
         Self {
             errors: Vec::new(),

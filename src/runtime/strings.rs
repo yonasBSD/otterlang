@@ -121,9 +121,9 @@ pub unsafe extern "C" fn otter_string_from_literal(ptr: *const c_char) -> *mut c
 ///
 /// # Safety
 ///
-/// this function dereferences raw pointers
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn otter_string_equal(s1: *const c_char, s2: *const c_char) -> i32 {
+    /// this function dereferences raw pointers
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn otter_string_equal(s1: *const c_char, s2: *const c_char) -> i32 {
     if s1.is_null() || s2.is_null() {
         return 0;
     }

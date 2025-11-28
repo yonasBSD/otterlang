@@ -7,20 +7,26 @@ fn divide(x: float, y: float) -> Result<float, string>:
         return Result.Err("Division by zero")
     return Result.Ok(x / y)
 
-fn safe_divide(x: float, y: float) -> float | None:
+fn safe_divide(x: float, y: float) -> Option<float>:
     match divide(x, y):
         case Result.Ok(value):
-            return value
+            return Option.Some(value)
         case Result.Err(error):
             pass
-            return None
+            return Option.None
 
 fn main():
     print("Error Handling Basics")
     print("====================")
     let result1 = safe_divide(10.0, 2.0)
-    if result1 != None:
-        print("Division by valid numbers works")
+    match result1:
+        case Option.Some(_):
+            print("Division by valid numbers works")
+        case Option.None:
+            pass
     let result2 = safe_divide(10.0, 0.0)
-    if result2 == None:
-        print("Division by zero handled gracefully")
+    match result2:
+        case Option.Some(_):
+            pass
+        case Option.None:
+            print("Division by zero handled gracefully")

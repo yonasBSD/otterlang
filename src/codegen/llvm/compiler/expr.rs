@@ -124,6 +124,7 @@ impl<'ctx> Compiler<'ctx> {
             } => self.eval_if_expr(expr, ctx),
             Expr::Match { value: _, arms: _ } => self.eval_match_expr(expr, ctx),
             Expr::FString { parts: _ } => self.eval_fstring_expr(expr, ctx),
+            Expr::Array(elements) => self.eval_array_expr(elements, ctx),
             _ => bail!("Expression type not implemented: {:?}", expr),
         }
     }
@@ -320,9 +321,33 @@ impl<'ctx> Compiler<'ctx> {
                         .build_conditional_branch(tag_match, field_check_bb, fail_bb)?;
                     self.builder.position_at_end(field_check_bb);
 
+                    // Get enum type to determine field types
+                    let enum_type = self.enum_type(enum_name)
+                        .ok_or_else(|| anyhow!("Enum type not found for {}", enum_name))?
+                        .clone();
+                    let TypeInfo::Enum { variants, .. } = enum_type else {
+                        bail!("Expected enum type for {}", enum_name);
+                    };
+                    let variant_info = variants
+                        .get(variant)
+                        .ok_or_else(|| anyhow!("Variant {} not found in enum {}", variant, enum_name))?
+                        .clone();
+
                     for (field_idx, field_pattern) in fields.iter().enumerate() {
-                        let get_field_fn =
-                            self.get_or_declare_ffi_function("runtime.enum.get_field")?;
+                        let field_type = variant_info
+                            .fields
+                            .get(field_idx)
+                            .ok_or_else(|| anyhow!("Field index {} out of bounds for variant {}", field_idx, variant))?
+                            .clone();
+                        
+                        // Use type-specific getter based on field type
+                        let get_field_fn_name = match enum_field_kind(&field_type) {
+                            EnumFieldKind::Int => "runtime.enum.get_i64",
+                            EnumFieldKind::Float => "runtime.enum.get_f64",
+                            EnumFieldKind::Bool => "runtime.enum.get_bool",
+                            EnumFieldKind::Ptr => "runtime.enum.get_ptr",
+                        };
+                        let get_field_fn = self.get_or_declare_ffi_function(get_field_fn_name)?;
                         let field_idx_val =
                             self.context.i64_type().const_int(field_idx as u64, false);
                         let field_val = self
@@ -336,7 +361,14 @@ impl<'ctx> Compiler<'ctx> {
                             .left()
                             .unwrap();
 
-                        let field_eval = EvaluatedValue::with_value(field_val, OtterType::Opaque);
+                        // Convert to appropriate OtterType
+                        let field_otter_type = match enum_field_kind(&field_type) {
+                            EnumFieldKind::Int => OtterType::I64,
+                            EnumFieldKind::Float => OtterType::F64,
+                            EnumFieldKind::Bool => OtterType::Bool,
+                            EnumFieldKind::Ptr => OtterType::Opaque,
+                        };
+                        let field_eval = EvaluatedValue::with_value(field_val, field_otter_type);
 
                         let next_field_bb = if field_idx < fields.len() - 1 {
                             self.context.append_basic_block(
@@ -511,14 +543,27 @@ impl<'ctx> Compiler<'ctx> {
                 let left_ptr = self.ensure_string_value(lhs.clone())?;
                 let right_ptr = self.ensure_string_value(rhs.clone())?;
                 let eq_fn = self.get_or_declare_ffi_function("std.strings.equal")?;
-                let res = self
+                let res_call = self
                     .builder
                     .build_call(eq_fn, &[left_ptr.into(), right_ptr.into()], "str_eq")?
                     .try_as_basic_value()
                     .left()
-                    .unwrap()
-                    .into_int_value();
-                Ok(res)
+                    .unwrap();
+                // Function returns i32, convert to i1 (bool) for comparison
+                let res_i32 = res_call.into_int_value();
+                // Check if it's i32 or i64 and convert accordingly
+                let zero = if res_i32.get_type().get_bit_width() == 32 {
+                    self.context.i32_type().const_zero()
+                } else {
+                    self.context.i64_type().const_zero()
+                };
+                let res_bool = self.builder.build_int_compare(
+                    IntPredicate::NE,
+                    res_i32,
+                    zero,
+                    "str_eq_bool",
+                )?;
+                Ok(res_bool)
             }
             _ => bail!("Equality check not implemented for type {:?}", lhs_ty),
         }
@@ -1068,7 +1113,63 @@ impl<'ctx> Compiler<'ctx> {
             let func_name = match func.as_ref().as_ref() {
                 Expr::Identifier(name) => name.clone(),
                 Expr::Member { object, field } => {
-                    if let Expr::Identifier(enum_name) = object.as_ref().as_ref() {
+                    // First, try to evaluate the object to check its runtime type
+                    // This handles cases like list.append() where the object is a variable
+                    if let Ok(evaluated) = self.eval_expr(object.as_ref().as_ref(), ctx) {
+                        if evaluated.value.is_some() {
+                            // Check if it's a list type and handle list methods
+                            if let OtterType::List = evaluated.ty.clone() {
+                                if field == "append" && !args.is_empty() {
+                                    // Determine the append function based on argument type
+                                    let arg_val = self.eval_expr(args[0].as_ref(), ctx)?;
+                                    let method_name: String = match arg_val.ty {
+                                        OtterType::Str => "append<list,string>".to_string(),
+                                        OtterType::I64 | OtterType::I32 => "append<list,int>".to_string(),
+                                        OtterType::F64 => "append<list,float>".to_string(),
+                                        OtterType::Bool => "append<list,bool>".to_string(),
+                                        OtterType::List | OtterType::Opaque => "append<list,list>".to_string(),
+                                        _ => bail!("unsupported append argument type: {:?}", arg_val.ty),
+                                    };
+                                    implicit_self = Some(evaluated);
+                                    method_name
+                                } else {
+                                    bail!("list method '{}' not supported or missing arguments", field);
+                                }
+                            } else if let OtterType::Struct(struct_id) = evaluated.ty.clone() {
+                                if let Some(method_name) = self.resolve_struct_method_name(struct_id, field) {
+                                    implicit_self = Some(evaluated);
+                                    method_name
+                                } else {
+                                    bail!("struct method '{}.{}' not found", self.struct_info(struct_id).name, field);
+                                }
+                            } else {
+                                // Not a list or struct, continue with other checks
+                                if let Expr::Identifier(enum_name) = object.as_ref().as_ref() {
+                                    if let Some(enum_value) =
+                                        self.try_build_enum_from_member(enum_name, field, args, ctx)?
+                                    {
+                                        return Ok(enum_value);
+                                    }
+                                    format!("{}.{}", enum_name, field)
+                                } else {
+                                    bail!("Complex member expressions not yet supported");
+                                }
+                            }
+                        } else {
+                            // Value is None, try enum constructor path
+                            if let Expr::Identifier(enum_name) = object.as_ref().as_ref() {
+                                if let Some(enum_value) =
+                                    self.try_build_enum_from_member(enum_name, field, args, ctx)?
+                                {
+                                    return Ok(enum_value);
+                                }
+                                format!("{}.{}", enum_name, field)
+                            } else {
+                                bail!("cannot call member '{}' without value", field);
+                            }
+                        }
+                    } else if let Expr::Identifier(enum_name) = object.as_ref().as_ref() {
+                        // Fallback: try enum constructor
                         if let Some(enum_value) =
                             self.try_build_enum_from_member(enum_name, field, args, ctx)?
                         {
@@ -1093,16 +1194,33 @@ impl<'ctx> Compiler<'ctx> {
                                 field
                             );
                         }
-                    } else if let Some(func_name) =
-                        self.resolve_member_function_name(object.as_ref().as_ref(), field)
-                    {
-                        func_name
                     } else {
+                        // Evaluate the object first to check its runtime type
                         let evaluated = self.eval_expr(object.as_ref().as_ref(), ctx)?;
                         if evaluated.value.is_none() {
                             bail!("cannot call member '{}' without value", field);
                         }
-                        if let OtterType::Struct(struct_id) = evaluated.ty.clone() {
+                        
+                        // Check if it's a list type and handle list methods
+                        if let OtterType::List = evaluated.ty.clone() {
+                            // Handle list method calls like list.append()
+                            if field == "append" && !args.is_empty() {
+                                // Determine the append function based on argument type
+                                let arg_val = self.eval_expr(args[0].as_ref(), ctx)?;
+                                let method_name: String = match arg_val.ty {
+                                    OtterType::Str => "append<list,string>".to_string(),
+                                    OtterType::I64 | OtterType::I32 => "append<list,int>".to_string(),
+                                    OtterType::F64 => "append<list,float>".to_string(),
+                                    OtterType::Bool => "append<list,bool>".to_string(),
+                                    OtterType::List | OtterType::Opaque => "append<list,list>".to_string(),
+                                    _ => bail!("unsupported append argument type: {:?}", arg_val.ty),
+                                };
+                                implicit_self = Some(evaluated);
+                                method_name
+                            } else {
+                                bail!("list method '{}' not supported or missing arguments", field);
+                            }
+                        } else if let OtterType::Struct(struct_id) = evaluated.ty.clone() {
                             if let Some(method_name) =
                                 self.resolve_struct_method_name(struct_id, field)
                             {
@@ -1115,6 +1233,10 @@ impl<'ctx> Compiler<'ctx> {
                                     field
                                 );
                             }
+                        } else if let Some(func_name) =
+                            self.resolve_member_function_name(object.as_ref().as_ref(), field)
+                        {
+                            func_name
                         } else {
                             bail!("Complex member expressions not yet supported (call)");
                         }
@@ -1123,11 +1245,25 @@ impl<'ctx> Compiler<'ctx> {
                 _ => bail!("Complex function expressions not yet supported"),
             };
 
-            // Look up the function
-            let function = if let Some(func) = self.declared_functions.get(&func_name) {
-                *func
+            // Handle overloaded builtins like len() - evaluate first arg to determine type
+            let (function, resolved_func_name, first_arg_evaluated) = if func_name == "len" && !args.is_empty() {
+                // Evaluate the first argument to determine its type
+                let arg_val = self.eval_expr(args[0].as_ref(), ctx)?;
+                let overloaded_name = match arg_val.ty {
+                    OtterType::Str => "len".to_string(),
+                    OtterType::List => "len<list>".to_string(),
+                    OtterType::Map => "len<map>".to_string(),
+                    _ => bail!("len() not supported for type {:?}", arg_val.ty),
+                };
+                if self.symbol_registry.contains(&overloaded_name) {
+                    (self.get_or_declare_ffi_function(&overloaded_name)?, overloaded_name, Some(arg_val))
+                } else {
+                    bail!("Function {} not found", overloaded_name);
+                }
+            } else if let Some(func) = self.declared_functions.get(&func_name) {
+                (*func, func_name.clone(), None)
             } else if self.symbol_registry.contains(&func_name) {
-                self.get_or_declare_ffi_function(&func_name)?
+                (self.get_or_declare_ffi_function(&func_name)?, func_name.clone(), None)
             } else {
                 bail!("Function {} not found", func_name);
             };
@@ -1148,18 +1284,23 @@ impl<'ctx> Compiler<'ctx> {
                     .ok_or_else(|| anyhow!("Cannot pass unit value as self"))?;
                 let param_type = param_types
                     .first()
-                    .ok_or_else(|| anyhow!("Method '{}' missing self parameter", func_name))?;
+                    .ok_or_else(|| anyhow!("Method '{}' missing self parameter", resolved_func_name))?;
                 let converted = self.cast_argument_for_call(v, self_arg.ty.clone(), param_type)?;
                 arg_values.push(converted.into());
                 param_offset = 1;
             }
 
             for (i, arg) in args.iter().enumerate() {
-                let arg_val = self.eval_expr(arg.as_ref(), ctx)?;
+                // Reuse first arg if it was already evaluated for len() dispatch
+                let arg_val = if i == 0 && first_arg_evaluated.is_some() {
+                    first_arg_evaluated.as_ref().unwrap().clone()
+                } else {
+                    self.eval_expr(arg.as_ref(), ctx)?
+                };
                 if let Some(v) = arg_val.value {
                     let param_type = param_types
                         .get(i + param_offset)
-                        .ok_or_else(|| anyhow!("Too many arguments for function {}", func_name))?;
+                        .ok_or_else(|| anyhow!("Too many arguments for function {}", resolved_func_name))?;
                     let converted =
                         self.cast_argument_for_call(v, arg_val.ty.clone(), param_type)?;
                     arg_values.push(converted.into());
@@ -1173,11 +1314,17 @@ impl<'ctx> Compiler<'ctx> {
 
             // Get return value
             if let Some(ret_val) = call_site.try_as_basic_value().left() {
-                let return_ty = function
-                    .get_type()
-                    .get_return_type()
-                    .map(|ty| self.otter_type_from_basic_type(ty))
-                    .unwrap_or(OtterType::Opaque);
+                // Use declared return type if available, otherwise infer from LLVM type
+                let return_ty = self.function_return_types
+                    .get(&resolved_func_name)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        function
+                            .get_type()
+                            .get_return_type()
+                            .map(|ty| self.otter_type_from_basic_type(ty))
+                            .unwrap_or(OtterType::Opaque)
+                    });
                 Ok(EvaluatedValue::with_value(ret_val, return_ty))
             } else {
                 // Function returns void
@@ -1299,6 +1446,52 @@ impl<'ctx> Compiler<'ctx> {
         Ok(EvaluatedValue::with_value(result, OtterType::Str))
     }
 
+    fn eval_array_expr(
+        &mut self,
+        elements: &[Node<Expr>],
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        // Create a new empty list
+        let create_fn = self.get_or_declare_ffi_function("list.new")?;
+        let handle = self
+            .builder
+            .build_call(create_fn, &[], "list_handle")?
+            .try_as_basic_value()
+            .left()
+            .ok_or_else(|| anyhow!("list creation returned void"))?
+            .into_int_value();
+
+        // Append each element to the list
+        for (idx, elem) in elements.iter().enumerate() {
+            let elem_val = self.eval_expr(elem.as_ref(), ctx)?;
+            let elem_value = elem_val.value.ok_or_else(|| {
+                anyhow!("array element {} produced no value", idx)
+            })?;
+
+            // Determine which append function to use based on element type
+            let append_fn_name = match elem_val.ty {
+                OtterType::Str => "append<list,string>",
+                OtterType::I64 | OtterType::I32 => "append<list,int>",
+                OtterType::F64 => "append<list,float>",
+                OtterType::Bool => "append<list,bool>",
+                OtterType::List | OtterType::Opaque => "append<list,list>",
+                _ => bail!("unsupported array element type: {:?}", elem_val.ty),
+            };
+
+            let append_fn = self.get_or_declare_ffi_function(append_fn_name)?;
+            let handle_arg: BasicMetadataValueEnum = handle.into();
+            let elem_arg: BasicMetadataValueEnum = elem_value.into();
+            
+            self.builder.build_call(
+                append_fn,
+                &[handle_arg, elem_arg],
+                &format!("append_{}", idx),
+            )?;
+        }
+
+        Ok(EvaluatedValue::with_value(handle.into(), OtterType::List))
+    }
+
     fn ensure_string_value(&mut self, value: EvaluatedValue<'ctx>) -> Result<BasicValueEnum<'ctx>> {
         let EvaluatedValue { ty, value } = value;
         let base_value = value.ok_or_else(|| anyhow!("expected value for string operation"))?;
@@ -1331,6 +1524,15 @@ impl<'ctx> Compiler<'ctx> {
                 vec![base_value],
                 "fmt_bool",
             ),
+            OtterType::List | OtterType::Opaque => {
+                // Try to convert list handle to string
+                // Opaque types might be list handles, so try stringify
+                self.call_ffi_returning_value(
+                    "stringify<list>",
+                    vec![base_value],
+                    "stringify_list",
+                )
+            }
             _ => bail!("cannot convert {:?} to string", ty),
         }
     }

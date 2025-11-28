@@ -38,12 +38,14 @@ fn ensure_runtime_library() -> Result<PathBuf> {
     fs::create_dir_all(&runtime_lib_dir).context("failed to create runtime library directory")?;
 
     // Build the runtime as a static library
+    // Use --no-default-features to exclude LLVM dependencies
     let mut cmd = Command::new("cargo");
     cmd.args([
         "rustc",
         "--release",
         "--lib",
         "--crate-type=staticlib",
+        "--no-default-features",
         "--target-dir",
         runtime_lib_dir.to_str().unwrap(),
     ]);
@@ -235,6 +237,10 @@ pub fn build_executable(
         None
     };
 
+    // Build and link the runtime static library (check once)
+    let runtime_lib = ensure_runtime_library()?;
+    let use_rust_runtime = runtime_lib.exists();
+
     // Link the object files together (target-specific)
     let linker = runtime_triple.linker();
     let mut cc = Command::new(&linker);
@@ -263,7 +269,13 @@ pub fn build_executable(
             cc.arg("-w"); // Suppress warnings
         }
 
-        if let Some(ref rt_o) = runtime_o {
+        // Skip C runtime when Rust runtime is available to avoid duplicate symbols
+        // The C runtime is only needed as a fallback when Rust runtime isn't available
+        if use_rust_runtime {
+            // Use Rust runtime - don't link C runtime
+            cc.arg(&object_path).arg("-o").arg(output);
+        } else if let Some(ref rt_o) = runtime_o {
+            // Fallback to C runtime if Rust runtime doesn't exist
             cc.arg(&object_path).arg(rt_o).arg("-o").arg(output);
         } else {
             cc.arg(&object_path).arg("-o").arg(output);
@@ -304,9 +316,46 @@ pub fn build_executable(
         cc.arg(lib);
     }
 
-    // Build and link the runtime static library
-    let runtime_lib = ensure_runtime_library()?;
-    cc.arg(&runtime_lib);
+    // Link the Rust runtime library (skip if we used C runtime fallback)
+    if use_rust_runtime {
+        // Link the runtime library - use -force_load on macOS to ensure all symbols are included
+        if runtime_triple.os == "darwin" {
+            cc.arg("-force_load").arg(&runtime_lib);
+            // Link against system libraries required by LLVM dependencies in runtime
+            // Use pkg-config to get proper library paths
+            if let Ok(output) = std::process::Command::new("pkg-config")
+                .args(["--libs", "libxml-2.0", "libzstd"])
+                .output()
+            {
+                if output.status.success() {
+                    let libs = String::from_utf8_lossy(&output.stdout);
+                    for lib_flag in libs.trim().split_whitespace() {
+                        cc.arg(lib_flag);
+                    }
+                } else {
+                    // Fallback: try Homebrew paths
+                    cc.arg("-L/opt/homebrew/lib");
+                    cc.arg("-L/opt/homebrew/opt/zstd/lib");
+                    cc.arg("-lxml2").arg("-lzstd");
+                }
+            } else {
+                // Fallback: try Homebrew paths
+                cc.arg("-L/opt/homebrew/lib");
+                cc.arg("-L/opt/homebrew/opt/zstd/lib");
+                cc.arg("-lxml2").arg("-lzstd");
+            }
+            // Standard system libraries
+            cc.arg("-lreadline").arg("-lncurses").arg("-lz").arg("-lffi").arg("-lc++");
+        } else if runtime_triple.is_windows() {
+            cc.arg(&runtime_lib);
+        } else {
+            cc.arg("-Wl,--whole-archive").arg(&runtime_lib).arg("-Wl,--no-whole-archive");
+        }
+    }
+
+    // Add -v flag to see full linker invocation for debugging
+    // Uncomment the line below to see verbose linker output
+    // cc.arg("-v");
 
     let status = cc.status().context("failed to invoke system linker (cc)")?;
 
@@ -493,6 +542,10 @@ pub fn build_shared_library(
         output.with_extension(lib_ext)
     };
 
+    // Build and check runtime static library (check once)
+    let runtime_lib = ensure_runtime_library()?;
+    let use_rust_runtime = runtime_lib.exists();
+
     // Link as shared library (target-specific)
     let linker = runtime_triple.linker();
     let mut cc = Command::new(&linker);
@@ -518,9 +571,15 @@ pub fn build_shared_library(
             cc.arg("-mmacosx-version-min=11.0");
         }
 
-        cc.arg("-o").arg(&lib_path).arg(&object_path);
-        if let Some(ref rt_o) = runtime_o {
-            cc.arg(rt_o);
+        // Skip C runtime when Rust runtime is available to avoid duplicate symbols
+        if use_rust_runtime {
+            // Use Rust runtime - don't link C runtime
+            cc.arg("-o").arg(&lib_path).arg(&object_path);
+        } else if let Some(ref rt_o) = runtime_o {
+            // Fallback to C runtime if Rust runtime doesn't exist
+            cc.arg("-o").arg(&lib_path).arg(&object_path).arg(rt_o);
+        } else {
+            cc.arg("-o").arg(&lib_path).arg(&object_path);
         }
     }
 
@@ -558,9 +617,16 @@ pub fn build_shared_library(
         cc.arg(lib);
     }
 
-    // Build and link the runtime static library
-    let runtime_lib = ensure_runtime_library()?;
-    cc.arg(&runtime_lib);
+    // Link the Rust runtime library (skip if we used C runtime fallback)
+    if use_rust_runtime {
+        if runtime_triple.os == "darwin" {
+            cc.arg("-force_load").arg(&runtime_lib);
+            // Link against system libraries required by LLVM dependencies in runtime
+            cc.arg("-lxml2").arg("-lreadline").arg("-lncurses").arg("-lz").arg("-lffi").arg("-lc++").arg("-lzstd");
+        } else {
+            cc.arg(&runtime_lib);
+        }
+    }
 
     let status = cc.status().context("failed to invoke system linker (cc)")?;
 

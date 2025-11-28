@@ -1,544 +1,281 @@
-# FFI Guide - Rust Crate Integration
+# FFI Guide – Rust Crate Integration
 
 ## Table of Contents
-
 - [Overview](#overview)
+- [Bridge Workflow](#bridge-workflow)
 - [Basic Usage](#basic-usage)
-  - [Importing Rust Crates](#importing-rust-crates)
-  - [Configuration (Optional)](#configuration-optional)
-  - [Module Access](#module-access)
-  - [Aliases](#aliases)
-- [Type Mapping](#type-mapping)
-  - [Primitive Types](#primitive-types)
-  - [Complex Types](#complex-types)
-- [Async Support](#async-support)
-  - [Spawn Pattern](#spawn-pattern)
-  - [Direct Await](#direct-await)
+  - [Import Syntax](#import-syntax)
+  - [Module Access and Aliases](#module-access-and-aliases)
+- [Supported Types](#supported-types)
+  - [Primitive Mapping](#primitive-mapping)
+  - [Option and Result Helpers](#option-and-result-helpers)
+  - [Opaque Handles](#opaque-handles)
+- [Async Functions](#async-functions)
 - [Error Handling](#error-handling)
-  - [Result Types](#result-types)
-  - [Option Types](#option-types)
 - [Memory Management](#memory-management)
-  - [Automatic Cleanup](#automatic-cleanup)
-  - [Manual Release (Advanced)](#manual-release-advanced)
-- [Configuration](#configuration)
-  - [Bridge Metadata](#bridge-metadata)
-  - [Cache Management](#cache-management)
-- [Database Integration](#database-integration)
-  - [SQLite](#sqlite)
-  - [PostgreSQL](#postgresql)
-- [Examples](#examples)
-- [Diagnostics](#diagnostics)
-- [Limitations](#limitations)
-- [Performance Considerations](#performance-considerations)
-- [Security](#security)
-- [Future Enhancements](#future-enhancements)
-- [Troubleshooting](#troubleshooting)
+- [Manual Configuration](#manual-configuration)
+  - [bridge.yaml Format](#bridgeyaml-format)
+  - [Call Templates](#call-templates)
+- [Caching and Build Artifacts](#caching-and-build-artifacts)
+- [Diagnostics and Troubleshooting](#diagnostics-and-troubleshooting)
+- [Limitations and Roadmap](#limitations-and-roadmap)
 
-OtterLang's transparent Foreign Function Interface (FFI) system allows you to use Rust libraries directly from OtterLang code without writing manual bindings or configuration files.
+OtterLang ships with a transparent Foreign Function Interface (FFI) that can load
+Rust crates directly with `use rust:<crate>`. The bridge is generated on demand,
+so most users do not have to write any Rust glue code.
 
 ## Overview
 
-The transparent bridge system provides seamless Rust crate integration:
+The current implementation focuses on calling public Rust *functions*. When a
+crate is imported we:
 
-- **Automatic API extraction** from Rust crates using `rustdoc` JSON
-- **Type-safe bindings** generated automatically for all public APIs
-- **Memory management** handled transparently (no manual memory management)
-- **Native async support** for Rust `Future` types
-- **Intelligent caching** by crate+version+features for fast rebuilds
-- **Zero configuration** for most use cases
+1. Discover its public API via `rustdoc` JSON (nightly toolchain required).
+2. Generate a `cdylib` stub crate that translates between OtterLang values and
+   Rust values.
+3. Compile that stub with Cargo and cache the result under
+   `~/.otter_cache/ffi/<crate>-<hash>/`.
+4. Load the shared library at runtime and register exported functions in the
+   interpreter and type checker.
+
+If rustdoc extraction fails, the bridge falls back to manual metadata defined in
+`crates/ffi/ffi/<crate>/bridge.yaml`.
+
+## Bridge Workflow
+
+Every `use rust:foo` import runs through the same pipeline:
+
+1. **Metadata lookup** – The `BridgeSymbolRegistry` checks for
+overrides/hand-authored functions under `crates/ffi/ffi/foo/bridge.yaml` and
+builds the dependency specification (version, features, path overrides).
+2. **Rustdoc extraction** – `cargo +nightly doc -Z unstable-options` produces a
+JSON description of the crate. We parse every public free function and drop ones
+with unsupported signatures.
+3. **Stub generation** – `crates/ffi` synthesizes a new cargo package named
+`otterffi_<crate>`. The stub wraps string parameters/returns with `CString`/`String`, translates scalars, and stores complex values in an internal handle table.
+4. **Compilation** – The stub is compiled once with `cargo build --release` and
+stored with its target artifacts; subsequent runs reuse the cached build.
+5. **Dynamic loading** – The shared library is loaded with `libloading` and its
+exports are registered so the Otter program can call them like regular
+functions.
 
 ## Basic Usage
 
-### Importing Rust Crates
-
-Use any Rust crate with a simple import statement:
+### Import Syntax
 
 ```otter
 use rust:rand
 
 fn main:
-    let value = rand.random_f64()
-    println("Random value: {}", value)
+    let number = rand.random_f64()
+    println("Random: {}", number)
 ```
 
-The `use rust:crate` syntax automatically:
-- Downloads and builds the Rust crate
-- Generates type-safe bindings for all public APIs
-- Registers symbols for compile-time type checking
-- Handles memory management transparently
+The first run may take a while because Cargo needs to fetch and build the crate
+plus the generated bridge. Later runs reuse the cached artifacts.
 
-### Configuration (Optional)
+### Module Access and Aliases
 
-**Most crates work without configuration!** The transparent bridge automatically extracts APIs from `rustdoc` JSON.
-
-For advanced use cases, create `ffi/<crate>/bridge.yaml`:
-
-```yaml
-dependency:
-  name: rand
-  version: "0.8"
-  features: ["std"]
-
-# Override specific function signatures if needed
-functions:
-  - name: "rand:custom_function"
-    rust_path: "rand::custom_path"
-    params: ["I32"]
-    result: "F64"
-```
-
-**Note:** Manual configuration overrides automatic extraction for specified functions.
-
-### Module Access
-
-Access functions using dot notation that mirrors Rust's module structure:
+Rust paths are flattened into dot-separated segments:
 
 ```otter
-use rust:chrono
+use rust:chrono as time
 
 fn main:
-    # chrono::Utc::now() becomes:
-    let now = chrono.Utc.now()
-    println("Current time: {}", now)
+    let now = time.Utc.now()
+    println("UTC timestamp: {}", now)
 ```
 
-### Aliases
+The example above maps `chrono::Utc::now` to `chrono.Utc.now`. You can alias a
+crate (`as time`) to avoid repeating long prefixes.
 
-Import crates with custom names:
+## Supported Types
 
-```otter
-use rust:serde_json as json
+Transparent generation only keeps functions whose parameter and return types can
+be mapped to one of the supported `TypeSpec` values. Unsupported types are
+skipped (they will not appear in Otter) unless you add a manual definition.
 
-fn main:
-    let data = json.from_str("{\"key\": \"value\"}")
-    println("Parsed: {}", data)
-```
+### Primitive Mapping
 
-## Type Mapping
+| Rust type                                | OtterLang view | Notes |
+|------------------------------------------|----------------|-------|
+| `()`                                     | `unit`         | Returned as `()` |
+| `bool`                                   | `bool`         | |
+| Signed integers (`i8` → `i64`)           | `i32`/`i64`    | Narrower widths are widened; `i128` becomes `i64` |
+| Unsigned integers (`u8` → `usize`)       | `i32`/`i64`    | Values are interpreted as signed integers |
+| Floating point (`f32`, `f64`)            | `f64`          | `f32` is widened |
+| `&str`, `String`                         | `str`          | Copied through UTF-8 strings |
 
-### Primitive Types
+### Option and Result Helpers
 
-| Rust Type | OtterLang Type | Description |
-|-----------|----------------|-------------|
-| `()` | `unit` | Unit type (no value) |
-| `bool` | `bool` | Boolean values |
-| `i32` | `i32` | 32-bit signed integer |
-| `i64` | `i64` | 64-bit signed integer |
-| `f64` | `f64` | 64-bit floating point |
-| `&str` / `String` | `str` | UTF-8 strings (copied) |
+The direct export of a function returning `Option<T>` or `Result<T, E>` mirrors
+whatever `T` maps to. In addition, the stub emits JSON helpers so callers can
+introspect success/failure without panicking:
 
-### Complex Types
-
-| Rust Type | OtterLang Representation | Description |
-|-----------|--------------------------|-------------|
-| `Option<T>` | `nil` or value | Automatic unwrapping, panics on `None` |
-| `Result<T, E>` | value or exception | Automatic unwrapping, exceptions on `Err` |
-| `Vec<T>` | `Opaque` handle | Reference-counted, automatically freed |
-| `&[T]` | `Opaque` handle | Copy-in/copy-out semantics |
-| Structs | `Opaque` handle | Field access not supported yet |
-| Enums | `Opaque` handle | Pattern matching not supported yet |
-
-## Async Support
-
-For async Rust functions, the bridge automatically generates two helpers:
-
-### Spawn Pattern
-
-```otter
-use rust:tokio
-
-fn main:
-    // Spawn returns an opaque handle (i64)
-    let handle = spawn(tokio.time.sleep(1000))
-    
-    // Do other work...
-    
-    // Await the result
-    let result = await(handle)
-```
-
-### Direct Await
-
-```otter
-use rust:tokio
-
-fn main:
-    // Direct await (spawns internally)
-    let result = await(tokio.time.sleep(1000))
-```
-
-The generated bridge exports:
-- `<function>_spawn(...)` → returns `Opaque` handle
-- `<function>_await(handle)` → returns the result type
-
-## Error Handling
-
-### Result Types
-
-For functions returning `Result<T, E>`, use the `_try` helper:
-
-```otter
-use rust:reqwest
-
-fn main:
-    // Returns JSON string: {"ok": true, "value": ...} or {"ok": false, "error": "..."}
-    let response = reqwest.get_try("https://api.example.com/data")
-    
-    // Parse and handle
-    // (In real code, you'd parse the JSON and check "ok" field)
-    print("Response: {}", response)
-```
-
-### Option Types
-
-For functions returning `Option<T>`, use the `_optjson` helper:
-
-```otter
-use rust:some_crate
-
-fn main:
-    // Returns JSON string: {"some": true, "value": ...} or {"some": false}
-    let result = some_crate.find_optjson("key")
-    
-    // Parse and handle
-    print("Result: {}", result)
-```
-
-## Memory Management
-
-### Automatic Cleanup
-
-Opaque handles (returned for complex types) are automatically reference-counted and cleaned up when no longer referenced:
-
-```otter
-use rust:some_crate
-
-fn main:
-    let handle = some_crate.create_thing()
-    // Use handle...
-    // Automatically dropped when handle goes out of scope
-```
-
-### Manual Release (Advanced)
-
-If you need to manually release a handle:
-
-```otter
-// Handles are automatically released when variables go out of scope
-// Manual release is rarely needed, but available via:
-// otter_handle_release(handle)
-```
-
-## Configuration
-
-### Bridge Metadata
-
-For fine-grained control, you can create `ffi/<crate>/bridge.yaml`:
-
-```yaml
-dependency:
-  name: "my_crate"
-  version: "1.0"
-  features: ["feature1", "feature2"]
-  default_features: false
-
-# Optional: manual function overrides
-# functions:
-#   - name: "custom_function"
-#     rust_path: "my_crate::custom::function"
-#     params: ["F64", "F64"]
-#     result: "F64"
-```
-
-### Cache Management
-
-Bridges are cached under `~/.otter_cache/ffi/<crate>-<hash>/` where the hash includes:
-- Crate name
-- Version
-- Features
-- Path (if using local path dependency)
-
-To clear cache:
-```bash
-rm -rf ~/.otter_cache/ffi
-```
-
-## Examples
-
-### Example 1: Random Numbers
-
-```otter
-use rust:rand
-
-fn main:
-    let random1 = rand.random_f64()
-    let random2 = rand.uniform(1.0, 10.0)
-    
-    print("Random [0,1): {}", random1)
-    print("Uniform [1,10): {}", random2)
-```
-
-### Example 2: JSON Parsing
+- `<path>.<fn>_optjson` returns `{"some": true, "value": ...}` or
+  `{"some": false}`
+- `<path>.<fn>_try` returns `{"ok": true, "value": ...}` or
+  `{"ok": false, "error": "Debug string"}`
 
 ```otter
 use rust:serde_json
 
 fn main:
-    let json_str = "{\"name\": \"Alice\", \"age\": 30}"
-    let parsed = serde_json.from_str_try(json_str)
-    
-    print("Parsed JSON: {}", parsed)
+    let payload = "{\"name\":\"Otter\"}"
+    let info = serde_json.from_str_try(payload)
+    println(info)  # => {"ok":true,"value":{...}}
 ```
 
-### Example 3: Date/Time
+### Opaque Handles
 
-```otter
-use rust:chrono
-
-fn main:
-    let now = chrono.Utc.now()
-    print("Current UTC time: {}", now)
-```
-
-### Example 4: Async HTTP Request
-
-```otter
-use rust:reqwest
-
-fn main:
-    // Spawn async request
-    let handle = spawn(reqwest.get("https://api.example.com"))
-    
-    print("Request sent, doing other work...")
-    
-    // Await result
-    let response = await(handle)
-    print("Response received: {}", response)
-```
-
-### Example 5: Complex Types
+Anything that does not map to a scalar (structs, enums, `Vec<T>`, iterators,
+async handles, etc.) is represented as a 64-bit handle. The stub keeps the real
+Rust value inside an internal store and only exposes the integer ID to Otter.
 
 ```otter
 use rust:nalgebra
 
 fn main:
-    // Create a vector (returns opaque handle)
-    let vec = nalgebra.Vector3.new(1.0, 2.0, 3.0)
-    
-    // Use the vector
-    let length = nalgebra.Vector3.norm(vec)
-    
-    print("Vector length: {}", length)
-    // vec is automatically dropped when it goes out of scope
+    let vec = nalgebra.Vector3.new(1.0, 2.0, 3.0)  # returns opaque handle (i64)
+    println("Handle: {}", vec)
 ```
 
-## Diagnostics
+Opaque handles remain alive until `otter_handle_release(handle)` is called from
+Otter code (this helper is exported by every bridge). Forgetting to release a
+handle keeps the Rust value in memory for the life of the process. There is also
+`otter_handle_clone(handle)` for manual reference-count bumps when sharing the
+same resource between multiple data structures.
 
-### Type Checking
+## Async Functions
 
-The type checker uses registry signatures when available, providing accurate type errors:
+When the extractor sees an `async fn` or a function returning a `Future`, it
+emits two helpers that run on a Tokio runtime embedded inside the stub:
+
+- `<path>.<fn>_spawn` – accepts the original arguments, spawns the future, and
+  returns an opaque handle to a `JoinHandle`
+- `<path>.<fn>_await` – accepts that handle, waits for completion, releases the
+  JoinHandle, and yields the mapped output type
 
 ```otter
-use rust:rand
+use rust:tokio
 
 fn main:
-    // Error: function expects 2 arguments, got 1
-    let x = rand.uniform(1.0)  // Type error
+    let join = tokio.time.sleep_sleep_spawn(1000)  # handle
+    println("doing other work...")
+    let _ = tokio.time.sleep_sleep_await(join)
 ```
 
-### Common Errors
+(Yes, the current naming duplicates the function segment; this is the behavior
+of the generator today.)
 
-#### "failed to create bridge crate directory"
-- **Cause**: Permission issues or disk full
-- **Fix**: Check `~/.otter_cache/ffi` permissions and disk space
+## Error Handling
 
-#### "rustdoc JSON not found"
-- **Cause**: Cargo doc failed or rustdoc JSON format unavailable
-- **Fix**: Ensure Rust toolchain is installed and up-to-date
+Rust panics are caught at the FFI boundary. If a panic occurs the stub prints no
+additional output but returns the default zero value for the mapped type (for
+strings that means a null pointer, for numbers it is 0). Prefer the `_try`
+helpers for explicit error reporting, especially when dealing with crates that
+return `Result`.
 
-#### "opaque handle type mismatch"
-- **Cause**: Using a handle from a different crate or wrong type
-- **Fix**: Ensure handle variable matches the function that created it
+## Memory Management
 
-#### "function expects N arguments, got M"
-- **Cause**: Argument count mismatch
-- **Fix**: Check function signature in Rust docs or use `_try`/`_optjson` helpers
+- Scalar values are copied across the boundary.
+- Strings are cloned; the stub allocates a `CString` and Otter copies it back
+  into an Otter `str`.
+- Opaque handles refer to entries in the stub’s `ffi_store`. Handles are simple
+  `i64` values on the Otter side, so the runtime is not yet aware of when they
+  should be dropped. Call `otter_handle_release(handle)` once you no longer need
+  the resource to avoid leaking the underlying Rust value.
+- Helper APIs (e.g., `_await`) automatically consume the handle they accept via
+  `ffi_store::take`, so you must not reuse a handle after awaiting.
 
-### Debug Mode
+## Manual Configuration
 
-Enable debug logging to see bridge generation:
+### bridge.yaml Format
 
-```bash
-OTTER_LOG=debug otter run my_program.ot
+Automatic extraction only works when the signature is supported and rustdoc can
+be produced. Add overrides or additional functions by creating
+`crates/ffi/ffi/<crate>/bridge.yaml`:
+
+```yaml
+# crates/ffi/ffi/serde_json/bridge.yaml
+dependency:
+  name: serde_json
+  version: "1.0"
+  features: ["std"]
+  default_features: true
+
+functions:
+  - name: serde_json.parse_from_file
+    rust_path: serde_json::from_reader
+    params: ["Opaque"]            # e.g. file handle
+    result: Str
+    call:
+      kind: direct
 ```
 
-This shows:
-- Bridge crate generation
-- Cache hits/misses
-- Symbol registration
-- Type conversions
+Fields:
+- `dependency` mirrors Cargo dependency options (`version`, `path`, `features`,
+  `default_features`). The crate name defaults to the directory name.
+- `functions` is a list of exports. `name` becomes the Otter identifier.
+- `params`/`result` accept `unit`, `bool`, `i32`, `i64`, `f64`, `str`, or
+  `opaque` (case-insensitive).
+- `rust_path` is optional; when omitted the generator uses the exported name as
+  `crate::path::to::function`.
 
-## Limitations
+### Call Templates
 
-### v1 Limitations
+`call.kind` selects how the stub wraps the Rust call:
 
-1. **Macros**: Rust macros are not exposed (only functions/types)
-2. **Proc Macros**: Not supported
-3. **Complex Generics**: Trait methods with complex generic parameters may not bridge correctly
-4. **Lifetimes**: Borrowed references (`&T`) are restricted to call scope
-5. **Unsafe Code**: Unsafe Rust functions require explicit allowlist in bridge.yaml
+- `direct` (default) – calls the function and returns its value.
+- `result` – expects the function to return `Result<T, E>` and converts it into a
+  JSON string in the same format as `_try`.
+- `expr` – use a custom Rust expression via `call.expr` with placeholders
+  `{0}`, `{1}`, … for arguments.
 
-### Type Limitations
+Manual entries override auto-generated ones with the same `name`, so you can
+patch individual signatures without losing the rest of the transparent surface.
 
-- **Slices**: Converted to opaque handles (copy-in/copy-out)
-- **Tuples**: Converted to opaque handles
-- **Enums**: Converted to opaque handles
-- **Structs**: Converted to opaque handles (no field access yet)
+## Caching and Build Artifacts
 
-## Database Integration
+- Bridge sources and build output live under `~/.otter_cache/ffi/` (respects the
+  platform-specific Otter cache root).
+- The cache key includes crate name, version, feature set, `default-features`,
+  and path overrides.
+- Clear the cache by deleting the directory if you need a clean rebuild:
+  `rm -rf ~/.otter_cache/ffi`.
+- Rustdoc JSONs are cached separately under `~/.otter_cache/ffi/rustdoc/<crate>/`
+  to avoid regenerating documentation repeatedly.
 
-OtterLang provides seamless database access through the same FFI system used for general Rust crate integration.
+## Diagnostics and Troubleshooting
 
-### SQLite
+- Set `OTTER_LOG=debug` when running your program to see messages about cache
+  hits, rustdoc generation, and Cargo builds.
+- The bridge requires the nightly toolchain for `rustdoc --output-format json`.
+  Install it with `rustup toolchain install nightly`. If nightly is missing the
+  generator falls back to manual metadata only.
+- If Cargo fails to compile the stub, try running `cargo build --release
+  --manifest-path ~/.otter_cache/ffi/<crate>-<hash>/Cargo.toml` to reproduce the
+  error directly.
+- "invalid opaque handle" means a handle was awaited or released twice. Make
+  sure to clone handles you intend to share and release each clone separately.
+- "rustdoc JSON not found" typically indicates that the crate failed to build
+  its documentation; re-run with `OTTER_LOG=debug` to inspect the Cargo output.
 
-**Driver**: `rusqlite` crate
-**Best for**: Embedded applications, testing, file-based storage
+## Limitations and Roadmap
 
-**Usage Example:**
+Current limitations of the transparent FFI:
 
-```otter
-use rust:rusqlite
-use json
+1. Only free functions are exported today. Trait methods and inherent impl
+   methods need manual entries.
+2. Struct field access, enum pattern matching, iterators, and macros are not
+   exposed.
+3. Generics beyond basic scalar substitutions become `opaque` handles. There is
+   no automatic deserialization to Otter compound types yet.
+4. Memory for opaque handles stays allocated until
+   `otter_handle_release(handle)` is called.
+5. The async helper names include the function name twice
+   (`foo.bar.baz.baz_spawn`). This may change in the future and should not be
+   relied upon for stable APIs.
+6. Building bridges requires Cargo and the nightly Rust toolchain.
 
-fn main:
-    # Open database connection
-    result = rusqlite.open("test.db")
-    data = json.parse(result)
-
-    if data["ok"]:
-        handle = data["handle"]
-
-        # Create table
-        rusqlite.execute(handle, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
-
-        # Insert data
-        rusqlite.execute(handle, "INSERT INTO users (name) VALUES ('Alice')")
-        rusqlite.execute(handle, "INSERT INTO users (name) VALUES ('Bob')")
-
-        # Query data
-        query_result = rusqlite.query(handle, "SELECT * FROM users")
-        rows = json.parse(query_result)
-        if rows["ok"]:
-            for row in rows["rows"]:
-                println(f"User ID: {row[\"id\"]}, Name: {row[\"name\"]}")
-
-        # Close connection
-        rusqlite.close(handle)
-    else:
-        println(f"Error: {data[\"error\"]}")
-```
-
-**API Functions:**
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `open` | `(path: string) -> string` | Open SQLite database file |
-| `execute` | `(handle: string, sql: string) -> string` | Execute DDL/DML statements |
-| `query` | `(handle: string, sql: string) -> string` | Execute SELECT queries |
-| `close` | `(handle: string) -> unit` | Close database connection |
-
-### PostgreSQL
-
-**Driver**: `postgres` crate
-**Best for**: Production applications, complex queries, connection pooling
-
-**Usage Example:**
-
-```otter
-use rust:postgres
-use json
-
-fn main:
-    # Connect to database
-    conn_str = "postgresql://user:password@localhost/mydb"
-    result = postgres.connect(conn_str)
-    data = json.parse(result)
-
-    if data["ok"]:
-        handle = data["handle"]
-
-        # Execute parameterized query
-        query_result = postgres.query(handle, "SELECT * FROM users WHERE age > $1")
-        rows = json.parse(query_result)
-        if rows["ok"]:
-            for row in rows["rows"]:
-                println(f"User: {row[\"name\"]}")
-
-        # Close connection
-        postgres.close(handle)
-    else:
-        println(f"Error: {data[\"error\"]}")
-```
-
-**API Functions:**
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `connect` | `(conn_string: string) -> string` | Establish database connection |
-| `execute` | `(handle: string, sql: string) -> string` | Execute DDL/DML statements |
-| `query` | `(handle: string, sql: string) -> string` | Execute SELECT queries |
-| `close` | `(handle: string) -> unit` | Close database connection |
-
-**Connection String Format:**
-```
-postgresql://username:password@host:port/database?sslmode=require
-```
-
-**Note:** Prepared statements and parameter binding are supported through the underlying Rust driver.
-
-## Future Enhancements
-
-Planned improvements:
-- Field access for struct types
-- Better enum pattern matching
-- Zero-copy slices for large data
-- Stream support (async iterators)
-- Macro exposure (experimental)
-
-## Troubleshooting
-
-### Bridge Not Found
-
-If a crate isn't found:
-1. Check crate name spelling
-2. Ensure crate is in `Cargo.toml` or available via crates.io
-3. Check `ffi/<crate>/bridge.yaml` exists if using custom config
-
-### Build Failures
-
-If bridge compilation fails:
-1. Check Rust toolchain: `rustc --version`
-2. Verify crate dependencies compile: `cargo check --manifest-path ffi/<crate>/Cargo.toml`
-3. Clear cache and rebuild: `rm -rf ~/.otter_cache/ffi`
-
-### Runtime Errors
-
-If runtime errors occur:
-1. Check function signature matches Rust docs
-2. Verify argument types match (use `_try` helpers for Result/Option)
-3. Enable debug logging to see FFI calls
-
-## Performance Considerations
-
-- **First Build**: Slow (compiles bridge crate + dependencies)
-- **Cache Hits**: Fast (uses precompiled library)
-- **Memory**: Opaque handles use reference counting (minimal overhead)
-- **Async**: Uses Tokio runtime (shared across all async calls)
-
-## Security
-
-- **Sandboxing**: FFI functions run in the same process (no isolation)
-- **Unsafe Code**: Explicitly allowlisted in bridge.yaml only
-- **Input Validation**: Validate inputs before passing to FFI functions
-- **Error Handling**: Always use `_try` helpers for Result types to handle errors gracefully
-
+Upcoming work includes better ownership tracking for opaque handles, smoother
+naming for async helpers, struct field exposure, and streaming/iterator support.

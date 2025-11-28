@@ -373,7 +373,7 @@ impl From<&Type> for TypeInfo {
                 "i32" => TypeInfo::I32,
                 "i64" | "int" => TypeInfo::I64,
                 "f64" | "float" => TypeInfo::F64,
-                "str" => TypeInfo::Str,
+                "str" | "string" => TypeInfo::Str,
                 "list" | "List" => TypeInfo::List(Box::new(TypeInfo::Unknown)),
                 "dict" | "Dict" => TypeInfo::Dict {
                     key: Box::new(TypeInfo::Unknown),

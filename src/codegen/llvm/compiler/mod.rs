@@ -38,6 +38,7 @@ pub struct Compiler<'ctx> {
     pub(crate) symbol_registry: &'static SymbolRegistry,
     pub(crate) string_ptr_type: PointerType<'ctx>,
     pub(crate) declared_functions: HashMap<String, FunctionValue<'ctx>>,
+    pub(crate) function_return_types: HashMap<String, OtterType>,
     #[allow(dead_code)]
     pub(crate) expr_types: HashMap<usize, TypeInfo>,
     pub(crate) enum_layouts: HashMap<String, EnumLayout>,
@@ -80,6 +81,7 @@ impl<'ctx> Compiler<'ctx> {
             symbol_registry,
             string_ptr_type,
             declared_functions: HashMap::new(),
+            function_return_types: HashMap::new(),
             expr_types,
             enum_layouts,
             function_defaults: HashMap::new(),
@@ -101,6 +103,17 @@ impl<'ctx> Compiler<'ctx> {
 
     pub(crate) fn enum_layout(&self, name: &str) -> Option<&EnumLayout> {
         self.enum_layouts.get(name)
+    }
+
+    pub(crate) fn enum_type(&self, name: &str) -> Option<&TypeInfo> {
+        // Search expr_types for an enum type with this name
+        self.expr_types.values().find(|ty| {
+            if let TypeInfo::Enum { name: enum_name, .. } = ty {
+                enum_name == name
+            } else {
+                false
+            }
+        })
     }
 
     fn ensure_struct_info(&mut self, name: &str) -> (u32, StructType<'ctx>) {
@@ -349,7 +362,14 @@ impl<'ctx> Compiler<'ctx> {
                     .map(OtterType::Struct)
                     .unwrap_or(OtterType::Opaque),
             },
-            ast::nodes::Type::Generic { .. } => OtterType::Opaque,
+            ast::nodes::Type::Generic { base, .. } => {
+                // Handle generic types like list<str>, map<str, int>, etc.
+                match base.as_str() {
+                    "list" | "List" => OtterType::List,
+                    "map" | "Map" => OtterType::Map,
+                    _ => OtterType::Opaque,
+                }
+            }
         }
     }
 
@@ -427,6 +447,14 @@ impl<'ctx> Compiler<'ctx> {
 
         let function = self.module.add_function(&func.name, fn_type, None);
         self.declared_functions.insert(func.name.clone(), function);
+
+        // Store return type for later use in eval_call_expr
+        let ret_otter_type = if let Some(ret_ty) = &func.ret_ty {
+            self.otter_type_from_annotation(ret_ty.as_ref())
+        } else {
+            OtterType::Unit
+        };
+        self.function_return_types.insert(func.name.clone(), ret_otter_type);
 
         // Store default values
         let defaults: Vec<Option<Expr>> = func
