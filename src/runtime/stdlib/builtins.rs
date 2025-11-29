@@ -54,6 +54,14 @@ struct ArrayIterator {
 static ARRAY_ITERATORS: Lazy<RwLock<std::collections::HashMap<HandleId, ArrayIterator>>> =
     Lazy::new(|| RwLock::new(std::collections::HashMap::new()));
 
+struct StringIterator {
+    string: String,
+    index: usize,
+}
+
+static STRING_ITERATORS: Lazy<RwLock<std::collections::HashMap<HandleId, StringIterator>>> =
+    Lazy::new(|| RwLock::new(std::collections::HashMap::new()));
+
 fn value_to_string(value: &Value) -> String {
     match value {
         Value::Unit => "None".to_string(),
@@ -866,6 +874,53 @@ pub extern "C" fn otter_builtin_iter_free_array(iter_handle: u64) {
     ARRAY_ITERATORS.write().remove(&iter_handle);
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer.
+/// The caller must ensure that `ptr` points to a valid null-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn otter_builtin_iter_string(ptr: *const c_char) -> u64 {
+    let s = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
+    let id = next_handle_id();
+    let iter = StringIterator { string: s, index: 0 };
+    STRING_ITERATORS.write().insert(id, iter);
+    id
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn otter_builtin_iter_has_next_string(iter_handle: u64) -> bool {
+    let iterators = STRING_ITERATORS.read();
+    if let Some(iter) = iterators.get(&iter_handle) {
+        iter.index < iter.string.len()
+    } else {
+        false
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn otter_builtin_iter_next_string(iter_handle: u64) -> u64 {
+    let mut iterators = STRING_ITERATORS.write();
+    if let Some(iter) = iterators.get_mut(&iter_handle) {
+        if iter.index < iter.string.len() {
+            let mut chars = iter.string[iter.index..].chars();
+            if let Some(c) = chars.next() {
+                let char_len = c.len_utf8();
+                iter.index += char_len;
+                let s = c.to_string();
+                return CString::new(s).unwrap().into_raw() as u64;
+            }
+        }
+        0
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn otter_builtin_iter_free_string(iter_handle: u64) {
+    STRING_ITERATORS.write().remove(&iter_handle);
+}
+
 /// otter-lang's builtin panic function
 ///
 /// # Safety
@@ -1383,58 +1438,6 @@ pub extern "C" fn otter_builtin_task_ready(task_handle: u64) -> bool {
     }
 }
 
-/// # Safety
-///
-/// This function dereferences the `cases` raw pointer.
-/// The caller must ensure that `cases` points to a valid array of `SelectCase` structures
-/// with at least `num_cases` elements, and that the memory remains valid for the duration
-/// of the function call.
-pub unsafe extern "C" fn otter_builtin_select(
-    cases: *const SelectCase,
-    num_cases: i64,
-    default_available: bool,
-) -> i64 {
-    if cases.is_null() || num_cases <= 0 {
-        return -1; // No case selected
-    }
-
-    // For now, try cases in order until one succeeds
-    // This is a simplified implementation - full select would use polling
-    unsafe {
-        let cases_slice = std::slice::from_raw_parts(cases, num_cases as usize);
-
-        for (idx, case) in cases_slice.iter().enumerate() {
-            if case.is_send {
-                // Try send - check if channel has space (is not full)
-                // For now, assume channels are unbuffered, so try immediate send
-                // In a full implementation, this would check if receiver is waiting
-                let can_send = true; // Simplified: assume we can always send for now
-
-                if can_send {
-                    // For send operations, we need to determine the value type
-                    // This is a simplified implementation - in practice we'd need
-                    // type information or separate select functions for different types
-                    return idx as i64; // Case succeeded
-                }
-            } else {
-                // Try receive - check if channel has data available
-                let has_data = true; // Simplified: assume data is available for now
-
-                if has_data {
-                    return idx as i64; // Case succeeded
-                }
-            }
-        }
-    }
-
-    // No case succeeded
-    if default_available {
-        -1 // Default case
-    } else {
-        -2 // Block (would block in real implementation)
-    }
-}
-
 // ============================================================================
 // Symbol Registration
 // ============================================================================
@@ -1837,21 +1840,6 @@ fn register_builtin_symbols(registry: &SymbolRegistry) {
         signature: FfiSignature::new(vec![FfiType::Map], FfiType::Str),
     });
 
-    // Select statement functions
-    registry.register(FfiFunction {
-        name: "select.case".into(),
-        symbol: "otter_builtin_select_case_create".into(),
-        signature: FfiSignature::new(
-            vec![FfiType::I64, FfiType::Bool, FfiType::Str],
-            FfiType::Opaque,
-        ),
-    });
-
-    registry.register(FfiFunction {
-        name: "select".into(),
-        symbol: "otter_builtin_select".into(),
-        signature: FfiSignature::new(vec![FfiType::List, FfiType::Bool], FfiType::I64),
-    });
 
     // Async/await functions
     registry.register(FfiFunction {
@@ -1968,8 +1956,34 @@ fn register_builtin_symbols(registry: &SymbolRegistry) {
         symbol: "otter_builtin_iter_free_array".into(),
         signature: FfiSignature::new(vec![FfiType::Opaque], FfiType::Unit),
     });
+
+    // String Iterator functions
+    registry.register(FfiFunction {
+        name: "__otter_iter_string".into(),
+        symbol: "otter_builtin_iter_string".into(),
+        signature: FfiSignature::new(vec![FfiType::Str], FfiType::Opaque),
+    });
+
+    registry.register(FfiFunction {
+        name: "__otter_iter_has_next_string".into(),
+        symbol: "otter_builtin_iter_has_next_string".into(),
+        signature: FfiSignature::new(vec![FfiType::Opaque], FfiType::Bool),
+    });
+
+    registry.register(FfiFunction {
+        name: "__otter_iter_next_string".into(),
+        symbol: "otter_builtin_iter_next_string".into(),
+        signature: FfiSignature::new(vec![FfiType::Opaque], FfiType::Opaque),
+    });
+
+    registry.register(FfiFunction {
+        name: "__otter_iter_free_string".into(),
+        symbol: "otter_builtin_iter_free_string".into(),
+        signature: FfiSignature::new(vec![FfiType::Opaque], FfiType::Unit),
+    });
 }
 
+#[cfg(feature = "ffi-main")]
 unsafe extern "C" {
     fn otter_entry();
 }

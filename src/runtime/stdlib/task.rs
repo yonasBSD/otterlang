@@ -274,6 +274,149 @@ pub extern "C" fn otter_task_close_channel(handle: u64) {
     FLOAT_CHANNELS.lock().remove(&handle);
 }
 
+// ============================================================================
+// Select Implementation
+// ============================================================================
+
+#[repr(C)]
+pub struct SelectCase {
+    channel: u64,
+    is_send: bool,
+    value: *const c_char, // For send operations (unused in readiness check)
+}
+
+/// # Safety
+///
+/// This function is unsafe because it creates a Box from a raw pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn otter_builtin_select_case_create(
+    channel: u64,
+    is_send: bool,
+    value: *const c_char,
+) -> *mut SelectCase {
+    let case = Box::new(SelectCase {
+        channel,
+        is_send,
+        value,
+    });
+    Box::into_raw(case)
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to free memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn otter_builtin_select_case_free(case: *mut SelectCase) {
+    if !case.is_null() {
+        unsafe { drop(Box::from_raw(case)) };
+    }
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to access cases.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn otter_builtin_select(
+    cases: *const SelectCase,
+    num_cases: i64,
+    default_available: bool,
+) -> i64 {
+    if cases.is_null() || num_cases <= 0 {
+        return -1;
+    }
+
+    let cases_slice = unsafe { std::slice::from_raw_parts(cases, num_cases as usize) };
+
+    // First pass: check for immediate readiness
+    for (idx, case) in cases_slice.iter().enumerate() {
+        if case.is_send {
+            // Send is always ready in unbounded channels
+            return idx as i64;
+        } else {
+            // Check if any channel has data
+            if STRING_CHANNELS
+                .lock()
+                .get(&case.channel)
+                .is_some_and(|wrapper| !wrapper.channel.is_empty())
+                || INT_CHANNELS
+                    .lock()
+                    .get(&case.channel)
+                    .is_some_and(|wrapper| !wrapper.channel.is_empty())
+                || FLOAT_CHANNELS
+                    .lock()
+                    .get(&case.channel)
+                    .is_some_and(|wrapper| !wrapper.channel.is_empty())
+            {
+                return idx as i64;
+            }
+        }
+    }
+
+    if default_available {
+        return -1;
+    }
+
+    // No channel ready, wait
+    #[cfg(feature = "task-runtime")]
+    {
+        let condvar_pair = Arc::new((Mutex::new(false), Condvar::new()));
+        let waker = create_condvar_waker(condvar_pair.clone());
+
+        loop {
+            // Register waker on all receive channels
+            for case in cases_slice.iter() {
+                if !case.is_send {
+                    if let Some(wrapper) = STRING_CHANNELS.lock().get(&case.channel) {
+                        wrapper.channel.channel.register_waker(&waker);
+                    } else if let Some(wrapper) = INT_CHANNELS.lock().get(&case.channel) {
+                        wrapper.channel.channel.register_waker(&waker);
+                    } else if let Some(wrapper) = FLOAT_CHANNELS.lock().get(&case.channel) {
+                        wrapper.channel.channel.register_waker(&waker);
+                    }
+                }
+            }
+
+            // Check again before sleeping to avoid race
+            for (idx, case) in cases_slice.iter().enumerate() {
+                if !case.is_send {
+                    if STRING_CHANNELS
+                        .lock()
+                        .get(&case.channel)
+                        .is_some_and(|wrapper| !wrapper.channel.is_empty())
+                        || INT_CHANNELS
+                            .lock()
+                            .get(&case.channel)
+                            .is_some_and(|wrapper| !wrapper.channel.is_empty())
+                        || FLOAT_CHANNELS
+                            .lock()
+                            .get(&case.channel)
+                            .is_some_and(|wrapper| !wrapper.channel.is_empty())
+                    {
+                        return idx as i64;
+                    }
+                }
+            }
+
+            // Wait
+            let mut ready = condvar_pair.0.lock();
+            if !*ready {
+                condvar_pair.1.wait(&mut ready);
+            }
+            *ready = false; // Reset for next iteration
+        }
+    }
+
+    #[cfg(not(feature = "task-runtime"))]
+    {
+        // Busy wait fallback if no task runtime
+        std::thread::sleep(Duration::from_millis(1));
+        // Recursive call to retry (or loop)
+        unsafe {
+            otter_builtin_select(cases, num_cases, default_available)
+        }
+    }
+}
+
 fn register_std_task_symbols(registry: &SymbolRegistry) {
     registry.register(FfiFunction {
         name: "task.spawn".into(),
@@ -339,6 +482,22 @@ fn register_std_task_symbols(registry: &SymbolRegistry) {
         name: "task.recv<string>".into(),
         symbol: "otter_task_recv_string".into(),
         signature: FfiSignature::new(vec![FfiType::Opaque], FfiType::Str),
+    });
+
+    // Select functions
+    registry.register(FfiFunction {
+        name: "select.case".into(),
+        symbol: "otter_builtin_select_case_create".into(),
+        signature: FfiSignature::new(
+            vec![FfiType::I64, FfiType::Bool, FfiType::Str],
+            FfiType::Opaque,
+        ),
+    });
+
+    registry.register(FfiFunction {
+        name: "select".into(),
+        symbol: "otter_builtin_select".into(),
+        signature: FfiSignature::new(vec![FfiType::List, FfiType::Bool], FfiType::I64),
     });
 
     registry.register(FfiFunction {

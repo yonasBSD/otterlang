@@ -42,13 +42,17 @@ impl TaskLocalStorage {
     }
 
     /// Get a reference to a value in task-local storage (without cloning).
-    pub fn get_ref<T>(&self) -> Option<std::sync::LockResult<parking_lot::MutexGuard<'_, T>>>
+    /// Get a reference to a value in task-local storage (without cloning).
+    pub fn get_ref<T>(&self) -> Option<parking_lot::MappedMutexGuard<'_, T>>
     where
         T: 'static + Send + Sync,
     {
-        // For non-cloneable types, we wrap them in Mutex
-        // This is a simplified version - in practice you'd want more sophisticated handling
-        None
+        let storage = self.storage.lock();
+        parking_lot::MutexGuard::try_map(storage, |s| {
+            s.get_mut(&TypeId::of::<T>())
+                .and_then(|boxed| boxed.downcast_mut::<T>())
+        })
+        .ok()
     }
 
     /// Remove a value from task-local storage.

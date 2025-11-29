@@ -46,6 +46,7 @@ fn ensure_runtime_library() -> Result<PathBuf> {
         "--lib",
         "--crate-type=staticlib",
         "--no-default-features",
+        "--features=ffi-main",
         "--target-dir",
         runtime_lib_dir.to_str().unwrap(),
     ]);
@@ -354,10 +355,29 @@ pub fn build_executable(
                 .arg("-lc++");
         } else if runtime_triple.is_windows() {
             cc.arg(&runtime_lib);
+            // Link against Windows system libraries required by dependencies (sysinfo, std, etc.)
+            cc.arg("-lws2_32")
+                .arg("-lpdh")
+                .arg("-liphlpapi")
+                .arg("-lnetapi32")
+                .arg("-luserenv")
+                .arg("-ladvapi32")
+                .arg("-lole32")
+                .arg("-loleaut32")
+                .arg("-lpsapi")
+                .arg("-lntdll")
+                .arg("-lshell32")
+                .arg("-lbcrypt")
+                .arg("-luser32");
         } else {
             cc.arg("-Wl,--whole-archive")
                 .arg(&runtime_lib)
-                .arg("-Wl,--no-whole-archive");
+                .arg("-Wl,--no-whole-archive")
+                .arg("-lstdc++")
+                .arg("-lm")
+                .arg("-ldl")
+                .arg("-lpthread")
+                .arg("-lz");
         }
     }
 
@@ -639,8 +659,29 @@ pub fn build_shared_library(
                 .arg("-lffi")
                 .arg("-lc++")
                 .arg("-lzstd");
-        } else {
+        } else if runtime_triple.is_windows() {
             cc.arg(&runtime_lib);
+            // Link against Windows system libraries required by dependencies
+            cc.arg("-lws2_32")
+                .arg("-lpdh")
+                .arg("-liphlpapi")
+                .arg("-lnetapi32")
+                .arg("-luserenv")
+                .arg("-ladvapi32")
+                .arg("-lole32")
+                .arg("-loleaut32")
+                .arg("-lpsapi")
+                .arg("-lntdll")
+                .arg("-lshell32")
+                .arg("-lbcrypt")
+                .arg("-luser32");
+        } else {
+            cc.arg(&runtime_lib)
+                .arg("-lstdc++")
+                .arg("-lm")
+                .arg("-ldl")
+                .arg("-lpthread")
+                .arg("-lz");
         }
     }
 

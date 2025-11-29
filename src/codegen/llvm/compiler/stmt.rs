@@ -423,30 +423,10 @@ impl<'ctx> Compiler<'ctx> {
                 OtterType::Str => {
                     // String iteration (character by character)
                     let (iter_create_fn, iter_has_next_fn, iter_next_fn, iter_free_fn) = (
-                        *self
-                            .declared_functions
-                            .get("__otter_iter_string")
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("String iterator runtime not available")
-                            })?,
-                        *self
-                            .declared_functions
-                            .get("__otter_iter_has_next_string")
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("String iterator runtime not available")
-                            })?,
-                        *self
-                            .declared_functions
-                            .get("__otter_iter_next_string")
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("String iterator runtime not available")
-                            })?,
-                        *self
-                            .declared_functions
-                            .get("__otter_iter_free_string")
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("String iterator runtime not available")
-                            })?,
+                        self.get_or_declare_ffi_function("__otter_iter_string")?,
+                        self.get_or_declare_ffi_function("__otter_iter_has_next_string")?,
+                        self.get_or_declare_ffi_function("__otter_iter_next_string")?,
+                        self.get_or_declare_ffi_function("__otter_iter_free_string")?,
                     );
 
                     self.lower_collection_for_loop(

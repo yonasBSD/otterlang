@@ -228,7 +228,9 @@ impl Default for MarkSweepGC {
 pub struct GenerationalGC {
     nursery: crate::runtime::memory::allocator::BumpAllocator,
     old_gen: MarkSweepGC,
-    nursery_size: usize,
+    _nursery_size: usize,
+    // Track objects allocated in nursery for minor GC
+    nursery_objects: Arc<RwLock<HashMap<usize, ObjectInfo>>>,
 }
 
 impl GenerationalGC {
@@ -238,7 +240,8 @@ impl GenerationalGC {
         Self {
             nursery: crate::runtime::memory::allocator::BumpAllocator::new(nursery_size),
             old_gen: MarkSweepGC::new(),
-            nursery_size,
+            _nursery_size: nursery_size,
+            nursery_objects: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -265,19 +268,84 @@ impl GenerationalGC {
 
     /// Minor GC: Collect nursery, promote survivors to old gen
     fn collect_minor(&self) -> GcStats {
-        // 1. Identify roots pointing to nursery
-        // 2. Copy survivors to old gen (or just mark them for now)
-        // 3. Reset nursery
+        let start = std::time::Instant::now();
+        let mut objects_collected = 0;
+        let mut bytes_freed = 0;
 
-        // Simplified implementation:
-        // Just reset nursery for now (assuming no survivors for this demo)
-        // In a real implementation, we would trace and copy.
-        self.nursery.reset();
+        // 1. Identify roots pointing to nursery
+        // In a real implementation, we'd filter roots. Here we check all roots.
+        let roots = self.old_gen.roots.read();
+        let nursery_objects = self.nursery_objects.read();
+        
+        // Find reachable objects in nursery
+        let mut reachable = HashSet::new();
+        let mut stack: Vec<usize> = roots.iter().copied().collect();
+
+        while let Some(ptr) = stack.pop() {
+            if reachable.contains(&ptr) {
+                continue;
+            }
+
+            // If it's in nursery, mark it
+            if nursery_objects.contains_key(&ptr) {
+                reachable.insert(ptr);
+                
+                // Trace children
+                if let Some(info) = nursery_objects.get(&ptr) {
+                    for &ref_ptr in &info.references {
+                        stack.push(ref_ptr);
+                    }
+                }
+            } else {
+                // If it's in old gen, we might need to trace into nursery
+                // (This requires write barriers in full impl, simplified here)
+                if let Some(info) = self.old_gen.objects.read().get(&ptr) {
+                     for &ref_ptr in &info.references {
+                        if !reachable.contains(&ref_ptr) {
+                            stack.push(ref_ptr);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Promote survivors to old gen
+        for ptr in reachable {
+            if let Some(info) = nursery_objects.get(&ptr) {
+                // Allocate in old gen
+                // Note: In a real copying GC, we'd copy the memory content here.
+                // Since we don't have direct memory access to the content structure easily here without unsafe casting,
+                // we simulate promotion by registering in old gen.
+                // Real impl would: memcpy(new_ptr, ptr, info.size)
+                
+                // For this simulation, we assume the pointer address stays valid (which isn't true for copying GC)
+                // OR we just register it in old gen and "pretend" we moved it.
+                // To be safer for this codebase, we'll just register it in old gen.
+                self.old_gen.register_object(ptr, info.size, info.references.clone());
+            }
+        }
+
+        // 3. Reset nursery
+        // Calculate freed stats
+        for (ptr, info) in nursery_objects.iter() {
+            if !self.old_gen.objects.read().contains_key(ptr) {
+                objects_collected += 1;
+                bytes_freed += info.size;
+                get_profiler().record_deallocation(*ptr);
+            }
+        }
+
+        // Clear nursery tracking
+        // Note: We don't actually reset the bump allocator here because we "promoted" by keeping pointers.
+        // In a real copying GC, we would reset the allocator because we moved everything out.
+        // self.nursery.reset(); 
+        drop(nursery_objects);
+        self.nursery_objects.write().clear();
 
         GcStats {
-            objects_collected: 0,
-            bytes_freed: self.nursery_size, // Roughly
-            duration_ms: 0,
+            objects_collected,
+            bytes_freed,
+            duration_ms: start.elapsed().as_millis() as u64,
         }
     }
 
