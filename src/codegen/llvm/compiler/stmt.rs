@@ -317,7 +317,7 @@ impl<'ctx> Compiler<'ctx> {
 
             self.lower_collection_for_loop(
                 var,
-                EvaluatedValue::with_value(list_val, OtterType::List),
+                EvaluatedValue::with_value(list_val, OtterType::list_of(start_ty.clone())),
                 body,
                 function,
                 ctx,
@@ -361,7 +361,7 @@ impl<'ctx> Compiler<'ctx> {
                         },
                     )
                 }
-                OtterType::List => {
+                OtterType::List(_) => {
                     // Array/list iteration
                     let iter_create_fn = self.get_or_declare_ffi_function("__otter_iter_array")?;
                     let iter_has_next_fn =
@@ -373,6 +373,7 @@ impl<'ctx> Compiler<'ctx> {
 
                     let element_type = self
                         .list_element_type(iterable)
+                        .or_else(|| iterable_val.ty.list_element().cloned())
                         .unwrap_or(OtterType::Opaque);
 
                     self.lower_collection_for_loop(
@@ -520,7 +521,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     // Exception handling (try/except/finally/raise) removed - use Result<T, E> pattern matching instead
-    fn list_element_type(&self, iterable: &Expr) -> Option<OtterType> {
+    pub(crate) fn list_element_type(&self, iterable: &Expr) -> Option<OtterType> {
         if let Some(ty) = self.expr_type(iterable) {
             self.resolve_list_element_type_from_typeinfo(ty)
         } else {
@@ -531,6 +532,11 @@ impl<'ctx> Compiler<'ctx> {
     fn resolve_list_element_type_from_typeinfo(&self, ty: &TypeInfo) -> Option<OtterType> {
         match ty {
             TypeInfo::List(inner) => self.typeinfo_to_otter_type(inner),
+            TypeInfo::Generic { base, args }
+                if base.eq_ignore_ascii_case("list") && args.len() == 1 =>
+            {
+                self.typeinfo_to_otter_type(&args[0])
+            }
             TypeInfo::Alias { underlying, .. } => {
                 self.resolve_list_element_type_from_typeinfo(underlying)
             }
@@ -546,15 +552,52 @@ impl<'ctx> Compiler<'ctx> {
             TypeInfo::I64 => Some(OtterType::I64),
             TypeInfo::F64 => Some(OtterType::F64),
             TypeInfo::Str => Some(OtterType::Str),
-            TypeInfo::List(_) => Some(OtterType::List),
+            TypeInfo::List(inner) => {
+                let element = self
+                    .typeinfo_to_otter_type(inner)
+                    .unwrap_or(OtterType::Opaque);
+                Some(OtterType::list_of(element))
+            }
             TypeInfo::Dict { .. } => Some(OtterType::Map),
             TypeInfo::Struct { name, .. } => self.struct_id(name).map(OtterType::Struct),
             TypeInfo::Alias { underlying, .. } => self.typeinfo_to_otter_type(underlying),
+            TypeInfo::Generic { base, args } => {
+                // Handle generic types
+                if args.is_empty() {
+                    // This is a bare generic type parameter (e.g., "T")
+                    // This should have been substituted by the type checker
+                    eprintln!(
+                        "WARNING: Unsubstituted generic type parameter '{}' encountered in codegen, treating as Opaque",
+                        base
+                    );
+                    Some(OtterType::Opaque)
+                } else {
+                    // This is a generic type with arguments (e.g., "List<T>")
+                    // Try to resolve it to a concrete type
+                    match base.as_str() {
+                        "List" | "list" => {
+                            let element = args
+                                .first()
+                                .and_then(|ty| self.typeinfo_to_otter_type(ty))
+                                .unwrap_or(OtterType::Opaque);
+                            Some(OtterType::list_of(element))
+                        }
+                        "Dict" | "dict" => Some(OtterType::Map),
+                        _ => {
+                            eprintln!(
+                                "WARNING: Unknown generic type '{}' with args, treating as Opaque",
+                                base
+                            );
+                            Some(OtterType::Opaque)
+                        }
+                    }
+                }
+            }
             _ => None,
         }
     }
 
-    fn decode_and_convert_tagged_value(
+    pub(crate) fn decode_and_convert_tagged_value(
         &mut self,
         encoded_value: BasicValueEnum<'ctx>,
         expected_type: &OtterType,
@@ -742,7 +785,7 @@ impl<'ctx> Compiler<'ctx> {
                 result.try_as_basic_value().left().unwrap()
             }
 
-            OtterType::List | OtterType::Map | OtterType::Opaque => {
+            OtterType::List(_) | OtterType::Map | OtterType::Opaque => {
                 let decode_fn =
                     self.get_or_declare_ffi_function("__otter_decode_value_as_handle")?;
                 let result =
@@ -865,7 +908,7 @@ impl<'ctx> Compiler<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>> {
         let value = match element_type {
             OtterType::Unit => return Ok(None),
-            OtterType::I64 | OtterType::Opaque | OtterType::List | OtterType::Map => raw_value,
+            OtterType::I64 | OtterType::Opaque | OtterType::List(_) | OtterType::Map => raw_value,
             OtterType::Struct(_) | OtterType::Tuple(_) => raw_value,
             OtterType::I32 => {
                 let int_val = raw_value.into_int_value();

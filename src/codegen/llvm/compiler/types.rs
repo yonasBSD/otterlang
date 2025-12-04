@@ -10,11 +10,31 @@ pub enum OtterType {
     I64,
     F64,
     Str,
-    Opaque, // For handles, pointers, etc.
-    List,
+    Opaque,               // For handles, pointers, etc.
+    List(Box<OtterType>), // Now tracks element type
     Map,
     Struct(u32),
     Tuple(Vec<OtterType>),
+}
+
+impl OtterType {
+    /// Construct a list type that tracks its element type
+    pub fn list_of(element: OtterType) -> Self {
+        OtterType::List(Box::new(element))
+    }
+
+    /// Construct a list type when the element type is unknown/opaque
+    pub fn opaque_list() -> Self {
+        Self::list_of(OtterType::Opaque)
+    }
+
+    /// Get the element type carried by the list, if available
+    pub fn list_element(&self) -> Option<&OtterType> {
+        match self {
+            OtterType::List(inner) => Some(inner.as_ref()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

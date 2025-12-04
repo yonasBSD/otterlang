@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::ffi::c_void;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::Arc;
@@ -24,6 +25,9 @@ type TaskCallback = extern "C" fn();
 static TASK_HANDLES: Lazy<Mutex<HashMap<HandleId, JoinHandle>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+static SPAWN_CONTEXTS: Lazy<Mutex<HashMap<u64, VecDeque<u64>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 fn next_handle_id() -> HandleId {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -41,6 +45,25 @@ pub extern "C" fn otter_task_spawn(callback: TaskCallback) -> u64 {
     let task_id = join.task_id().raw();
     TASK_HANDLES.lock().insert(task_id, join);
     task_id
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn otter_spawn_context_push(thunk_id: u64, ctx: *mut c_void) {
+    if ctx.is_null() {
+        return;
+    }
+    let mut guard = SPAWN_CONTEXTS.lock();
+    guard.entry(thunk_id).or_default().push_back(ctx as u64);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn otter_spawn_context_pop(thunk_id: u64) -> *mut c_void {
+    let mut guard = SPAWN_CONTEXTS.lock();
+    guard
+        .get_mut(&thunk_id)
+        .and_then(|queue| queue.pop_front())
+        .map(|ptr| ptr as *mut c_void)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]

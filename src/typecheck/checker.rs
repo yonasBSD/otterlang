@@ -18,15 +18,44 @@ pub struct TypeChecker {
     context: TypeContext,
     registry: Option<&'static SymbolRegistry>,
     expr_types: HashMap<usize, TypeInfo>,
+    expr_types_by_span: HashMap<Span, TypeInfo>,
+    expr_spans: HashMap<usize, Span>,
+    comprehension_var_types: HashMap<Span, TypeInfo>,
+    method_comprehension_spans: HashMap<String, Vec<Span>>,
+    method_expr_ids: HashMap<String, Vec<usize>>,
     features: LanguageFeatureFlags,
     /// Current function's return type (if inside a function)
     current_function_return_type: Option<TypeInfo>,
 }
 
 impl TypeChecker {
-    fn record_expr_type(&mut self, expr: &Expr, ty: &TypeInfo) {
-        let id = expr as *const Expr as usize;
+    fn is_unknown_like(ty: &TypeInfo) -> bool {
+        matches!(ty, TypeInfo::Unknown)
+            || matches!(ty, TypeInfo::Generic { args, .. } if args.is_empty())
+    }
+
+    fn merge_unknown_like_types(left: &TypeInfo, right: &TypeInfo) -> TypeInfo {
+        match (Self::is_unknown_like(left), Self::is_unknown_like(right)) {
+            (false, false) => left.clone(),
+            (false, true) => left.clone(),
+            (true, false) => right.clone(),
+            (true, true) => match (left, right) {
+                (
+                    TypeInfo::Generic { base: b1, args: a1 },
+                    TypeInfo::Generic { base: b2, args: a2 },
+                ) if a1.is_empty() && a2.is_empty() && b1 == b2 => left.clone(),
+                (TypeInfo::Generic { args, .. }, _) if args.is_empty() => left.clone(),
+                (_, TypeInfo::Generic { args, .. }) if args.is_empty() => right.clone(),
+                _ => TypeInfo::Unknown,
+            },
+        }
+    }
+
+    fn record_expr_type(&mut self, expr: &Node<Expr>, ty: &TypeInfo) {
+        let id = expr.as_ref() as *const Expr as usize;
         self.expr_types.insert(id, ty.clone());
+        self.expr_types_by_span.insert(*expr.span(), ty.clone());
+        self.expr_spans.insert(id, *expr.span());
     }
 
     pub fn new() -> Self {
@@ -66,6 +95,11 @@ impl TypeChecker {
             context,
             registry: None,
             expr_types: HashMap::new(),
+            expr_types_by_span: HashMap::new(),
+            expr_spans: HashMap::new(),
+            comprehension_var_types: HashMap::new(),
+            method_comprehension_spans: HashMap::new(),
+            method_expr_ids: HashMap::new(),
             features,
             current_function_return_type: None,
         }
@@ -161,12 +195,14 @@ impl TypeChecker {
                 Statement::Function(function) => {
                     self.check_function(function)?;
                 }
+                Statement::Struct { name, methods, .. } => {
+                    self.check_struct_methods(name, methods)?;
+                }
                 Statement::Let { .. } | Statement::Expr(_) => {
                     // Top-level let and expressions are allowed
                     self.check_statement(statement)?;
                 }
-                Statement::Struct { .. }
-                | Statement::Enum { .. }
+                Statement::Enum { .. }
                 | Statement::TypeAlias { .. }
                 | Statement::Use { .. }
                 | Statement::PubUse { .. } => {}
@@ -189,6 +225,277 @@ impl TypeChecker {
         }
 
         Ok(())
+    }
+
+    fn check_struct_methods(
+        &mut self,
+        struct_name: &str,
+        methods: &[Node<Function>],
+    ) -> Result<()> {
+        for method in methods {
+            let mut method_clone = method.as_ref().clone();
+            method_clone.name = format!("{}.{}", struct_name, method_clone.name);
+            self.rewrite_method_self_param(&mut method_clone, struct_name);
+            let node = Node::new(method_clone, *method.span());
+            self.record_method_metadata(&node.as_ref().name, node.as_ref().body.as_ref());
+            self.check_function(&node)?;
+        }
+        Ok(())
+    }
+
+    fn record_method_metadata(&mut self, method_name: &str, body: &Block) {
+        let mut spans = Vec::new();
+        let mut expr_ids = Vec::new();
+        self.collect_metadata_in_block(body, &mut spans, &mut expr_ids);
+        if !spans.is_empty() {
+            self.method_comprehension_spans
+                .entry(method_name.to_string())
+                .or_default()
+                .extend(spans);
+        }
+        if !expr_ids.is_empty() {
+            self.method_expr_ids
+                .entry(method_name.to_string())
+                .or_default()
+                .extend(expr_ids);
+        }
+    }
+
+    fn collect_metadata_in_block(
+        &self,
+        block: &Block,
+        spans: &mut Vec<Span>,
+        expr_ids: &mut Vec<usize>,
+    ) {
+        for stmt in &block.statements {
+            self.collect_metadata_in_statement(stmt.as_ref(), spans, expr_ids);
+        }
+    }
+
+    fn collect_metadata_in_statement(
+        &self,
+        stmt: &Statement,
+        spans: &mut Vec<Span>,
+        expr_ids: &mut Vec<usize>,
+    ) {
+        match stmt {
+            Statement::Expr(expr)
+            | Statement::Let { expr, .. }
+            | Statement::Assignment { expr, .. } => {
+                self.collect_metadata_in_expr(expr, spans, expr_ids);
+            }
+            Statement::Return(Some(expr)) => self.collect_metadata_in_expr(expr, spans, expr_ids),
+            Statement::Return(None)
+            | Statement::Break
+            | Statement::Continue
+            | Statement::Pass
+            | Statement::Use { .. }
+            | Statement::PubUse { .. }
+            | Statement::Struct { .. }
+            | Statement::Enum { .. }
+            | Statement::TypeAlias { .. }
+            | Statement::Function(_) => {}
+            Statement::If {
+                cond,
+                then_block,
+                elif_blocks,
+                else_block,
+            } => {
+                self.collect_metadata_in_expr(cond, spans, expr_ids);
+                self.collect_metadata_in_block(then_block.as_ref(), spans, expr_ids);
+                for (elif_cond, block) in elif_blocks {
+                    self.collect_metadata_in_expr(elif_cond, spans, expr_ids);
+                    self.collect_metadata_in_block(block.as_ref(), spans, expr_ids);
+                }
+                if let Some(block) = else_block {
+                    self.collect_metadata_in_block(block.as_ref(), spans, expr_ids);
+                }
+            }
+            Statement::For { iterable, body, .. } => {
+                self.collect_metadata_in_expr(iterable, spans, expr_ids);
+                self.collect_metadata_in_block(body.as_ref(), spans, expr_ids);
+            }
+            Statement::While { cond, body } => {
+                self.collect_metadata_in_expr(cond, spans, expr_ids);
+                self.collect_metadata_in_block(body.as_ref(), spans, expr_ids);
+            }
+            Statement::Block(block) => {
+                self.collect_metadata_in_block(block.as_ref(), spans, expr_ids)
+            }
+        }
+    }
+
+    fn collect_metadata_in_expr(
+        &self,
+        expr: &Node<Expr>,
+        spans: &mut Vec<Span>,
+        expr_ids: &mut Vec<usize>,
+    ) {
+        let id = expr.as_ref() as *const Expr as usize;
+        expr_ids.push(id);
+        match expr.as_ref() {
+            Expr::ListComprehension {
+                element,
+                iterable,
+                condition,
+                ..
+            } => {
+                spans.push(*expr.span());
+                self.collect_metadata_in_expr(element, spans, expr_ids);
+                self.collect_metadata_in_expr(iterable, spans, expr_ids);
+                if let Some(cond) = condition {
+                    self.collect_metadata_in_expr(cond, spans, expr_ids);
+                }
+            }
+            Expr::DictComprehension {
+                key,
+                value,
+                iterable,
+                condition,
+                ..
+            } => {
+                spans.push(*expr.span());
+                self.collect_metadata_in_expr(key, spans, expr_ids);
+                self.collect_metadata_in_expr(value, spans, expr_ids);
+                self.collect_metadata_in_expr(iterable, spans, expr_ids);
+                if let Some(cond) = condition {
+                    self.collect_metadata_in_expr(cond, spans, expr_ids);
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                self.collect_metadata_in_expr(left, spans, expr_ids);
+                self.collect_metadata_in_expr(right, spans, expr_ids);
+            }
+            Expr::Unary { expr, .. }
+            | Expr::Await(expr)
+            | Expr::Spawn(expr)
+            | Expr::Member { object: expr, .. } => {
+                self.collect_metadata_in_expr(expr, spans, expr_ids);
+            }
+            Expr::Call { func, args } => {
+                self.collect_metadata_in_expr(func, spans, expr_ids);
+                for arg in args {
+                    self.collect_metadata_in_expr(arg, spans, expr_ids);
+                }
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                self.collect_metadata_in_expr(cond, spans, expr_ids);
+                self.collect_metadata_in_expr(then_branch, spans, expr_ids);
+                if let Some(expr) = else_branch {
+                    self.collect_metadata_in_expr(expr, spans, expr_ids);
+                }
+            }
+            Expr::Match { value, arms } => {
+                self.collect_metadata_in_expr(value, spans, expr_ids);
+                for arm in arms {
+                    if let Some(guard) = &arm.as_ref().guard {
+                        self.collect_metadata_in_expr(guard, spans, expr_ids);
+                    }
+                    self.collect_metadata_in_block(arm.as_ref().body.as_ref(), spans, expr_ids);
+                }
+            }
+            Expr::Range { start, end } => {
+                self.collect_metadata_in_expr(start, spans, expr_ids);
+                self.collect_metadata_in_expr(end, spans, expr_ids);
+            }
+            Expr::Array(elements) => {
+                for elem in elements {
+                    self.collect_metadata_in_expr(elem, spans, expr_ids);
+                }
+            }
+            Expr::Dict(pairs) => {
+                for (key, value) in pairs {
+                    self.collect_metadata_in_expr(key, spans, expr_ids);
+                    self.collect_metadata_in_expr(value, spans, expr_ids);
+                }
+            }
+            Expr::FString { parts } => {
+                for part in parts {
+                    if let FStringPart::Expr(expr) = part.as_ref() {
+                        self.collect_metadata_in_expr(expr, spans, expr_ids);
+                    }
+                }
+            }
+            Expr::Struct { fields, .. } => {
+                for (_, value) in fields {
+                    self.collect_metadata_in_expr(value, spans, expr_ids);
+                }
+            }
+            Expr::Literal(_) | Expr::Identifier(_) => {}
+        }
+    }
+
+    fn infer_struct_generics_from_instance(
+        &mut self,
+        struct_name: &str,
+        concrete_fields: &HashMap<String, TypeInfo>,
+    ) -> HashMap<String, TypeInfo> {
+        let mut inferred = HashMap::new();
+        if let Some(struct_def) = self.context.get_struct(struct_name).cloned() {
+            for (field_name, field_ty) in &struct_def.fields {
+                if let Some(concrete_ty) = concrete_fields.get(field_name) {
+                    self.infer_generics_from_type_info(
+                        field_ty,
+                        concrete_ty,
+                        &struct_def.generics,
+                        &mut inferred,
+                    );
+                }
+            }
+        }
+        inferred
+    }
+
+    fn apply_method_specialization(
+        &mut self,
+        method_name: &str,
+        inferred: &HashMap<String, TypeInfo>,
+    ) {
+        if inferred.is_empty() {
+            return;
+        }
+        if let Some(spans) = self.method_comprehension_spans.get(method_name) {
+            for span in spans {
+                if let Some(ty) = self.comprehension_var_types.get_mut(span) {
+                    *ty = ty.substitute(inferred);
+                }
+            }
+        }
+        if let Some(expr_ids) = self.method_expr_ids.get(method_name) {
+            for id in expr_ids {
+                if let Some(ty) = self.expr_types.get_mut(id) {
+                    *ty = ty.substitute(inferred);
+                    if let Some(span) = self.expr_spans.get(id) {
+                        self.expr_types_by_span.insert(*span, ty.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn rewrite_method_self_param(&self, method_func: &mut Function, struct_name: &str) {
+        let Some(first_param) = method_func.params.first_mut() else {
+            return;
+        };
+
+        if let Some(ty) = first_param.as_ref().ty.as_ref() {
+            if matches!(ty.as_ref(), Type::Simple(name) if name == "Self") {
+                let span = *ty.span();
+                let replacement = Type::Simple(struct_name.to_string());
+                first_param.as_mut().ty = Some(Node::new(replacement, span));
+            }
+            return;
+        }
+
+        if first_param.as_ref().name.as_ref() == "self" {
+            let span = *first_param.as_ref().name.span();
+            let replacement = Type::Simple(struct_name.to_string());
+            first_param.as_mut().ty = Some(Node::new(replacement, span));
+        }
     }
 
     /// Infer function signature from declaration
@@ -366,8 +673,15 @@ impl TypeChecker {
                     }
 
                     for method in methods {
-                        let method_name = format!("{}.{}", name, method.as_ref().name);
-                        let sig = self.infer_function_signature(method);
+                        let mut method_clone = method.as_ref().clone();
+                        self.rewrite_method_self_param(&mut method_clone, name);
+                        let method_name = format!("{}.{}", name, method_clone.name);
+                        let method_node = Node::new(method_clone, *method.span());
+                        self.record_method_metadata(
+                            &method_name,
+                            method_node.as_ref().body.as_ref(),
+                        );
+                        let sig = self.infer_function_signature(&method_node);
                         self.context.insert_function(method_name.clone(), sig);
                     }
 
@@ -1383,15 +1697,21 @@ impl TypeChecker {
                                 (TypeInfo::I64, _) | (_, TypeInfo::I64) => Ok(TypeInfo::I64),
                                 (TypeInfo::I32, TypeInfo::I32) => Ok(TypeInfo::I32),
                                 _ => {
-                                    self.errors.push(
-                                        TypeError::new(format!(
-                                            "cannot apply {op:?} to {} and {}",
-                                            left_type.display_name(),
-                                            right_type.display_name()
-                                        ))
-                                        .with_span(*span),
-                                    );
-                                    Ok(TypeInfo::Error)
+                                    if Self::is_unknown_like(&left_type)
+                                        || Self::is_unknown_like(&right_type)
+                                    {
+                                        Ok(Self::merge_unknown_like_types(&left_type, &right_type))
+                                    } else {
+                                        self.errors.push(
+                                            TypeError::new(format!(
+                                                "cannot apply {op:?} to {} and {}",
+                                                left_type.display_name(),
+                                                right_type.display_name()
+                                            ))
+                                            .with_span(*span),
+                                        );
+                                        Ok(TypeInfo::Error)
+                                    }
                                 }
                             }
                         }
@@ -1463,15 +1783,21 @@ impl TypeChecker {
                                 (TypeInfo::I32, TypeInfo::I32) => Ok(TypeInfo::I32),
                                 (TypeInfo::I64, TypeInfo::I64) => Ok(TypeInfo::I64),
                                 _ => {
-                                    self.errors.push(
-                                        TypeError::new(format!(
-                                            "modulo requires integer operands, got {} and {}",
-                                            left_type.display_name(),
-                                            right_type.display_name()
-                                        ))
-                                        .with_span(*span),
-                                    );
-                                    Ok(TypeInfo::Error)
+                                    if Self::is_unknown_like(&left_type)
+                                        || Self::is_unknown_like(&right_type)
+                                    {
+                                        Ok(TypeInfo::Unknown)
+                                    } else {
+                                        self.errors.push(
+                                            TypeError::new(format!(
+                                                "modulo requires integer operands, got {} and {}",
+                                                left_type.display_name(),
+                                                right_type.display_name()
+                                            ))
+                                            .with_span(*span),
+                                        );
+                                        Ok(TypeInfo::Error)
+                                    }
                                 }
                             }
                         }
@@ -1624,6 +1950,16 @@ impl TypeChecker {
                                 }
                                 params_slice = &params[1..];
                                 defaults_slice = &param_defaults[1..];
+
+                                if let TypeInfo::Struct { name, fields } = object_type {
+                                    let inferred =
+                                        self.infer_struct_generics_from_instance(&name, &fields);
+                                    let method_name = match func.as_ref().as_ref() {
+                                        Expr::Member { field, .. } => format!("{}.{}", name, field),
+                                        _ => name.clone(),
+                                    };
+                                    self.apply_method_specialization(&method_name, &inferred);
+                                }
                             }
 
                             if has_signature {
@@ -2089,6 +2425,9 @@ impl TypeChecker {
                         }
                     }
 
+                    self.comprehension_var_types
+                        .insert(*span, element_iter_type.clone());
+
                     let element_type = self.infer_expr_type(element)?;
 
                     match previous {
@@ -2139,6 +2478,9 @@ impl TypeChecker {
                             );
                         }
                     }
+
+                    self.comprehension_var_types
+                        .insert(*span, element_iter_type.clone());
 
                     let key_type = self.infer_expr_type(key)?;
                     if !key_type.is_compatible_with(&TypeInfo::Str) {
@@ -2363,6 +2705,8 @@ impl TypeChecker {
                 Expr::Await(expr) => {
                     // Await expects an async/awaitable type
                     let inner_type = self.infer_expr_type(expr)?;
+                    let awaited_type =
+                        matches!(&inner_type, TypeInfo::Generic { base, .. } if base == "Task");
 
                     // Check if inner_type is actually awaitable
                     match &inner_type {
@@ -2380,21 +2724,29 @@ impl TypeChecker {
                         }
                     }
 
-                    // For await, we return the inner type (unwrap the async wrapper)
-                    Ok(inner_type)
+                    if !awaited_type {
+                        self.errors.push(
+                            TypeError::new("await expects a Task handle".to_string())
+                                .with_span(*expr.span()),
+                        );
+                    }
+
+                    Ok(TypeInfo::Unit)
                 }
                 Expr::Spawn(expr) => {
                     // Spawn creates a task from an expression
                     // Type check the inner expression
-                    let _inner_type = self.infer_expr_type(expr)?;
+                    let inner_type = self.infer_expr_type(expr)?;
 
-                    // Spawn returns a task handle (for now, return Unknown)
-                    Ok(TypeInfo::Unknown)
+                    Ok(TypeInfo::Generic {
+                        base: "Task".to_string(),
+                        args: vec![inner_type],
+                    })
                 }
             }
         })()?;
 
-        self.record_expr_type(expr.as_ref(), &ty);
+        self.record_expr_type(expr, &ty);
         Ok(ty)
     }
 
@@ -2407,8 +2759,18 @@ impl TypeChecker {
         &self.expr_types
     }
 
-    pub fn into_expr_type_map(self) -> HashMap<usize, TypeInfo> {
-        self.expr_types
+    pub fn into_type_maps(
+        self,
+    ) -> (
+        HashMap<usize, TypeInfo>,
+        HashMap<Span, TypeInfo>,
+        HashMap<Span, TypeInfo>,
+    ) {
+        (
+            self.expr_types,
+            self.expr_types_by_span,
+            self.comprehension_var_types,
+        )
     }
 
     pub fn enum_layouts(&self) -> HashMap<String, EnumLayout> {

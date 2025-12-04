@@ -14,7 +14,8 @@ use inkwell::values::{FunctionValue, PointerValue};
 use crate::codegen::llvm::bridges::prepare_rust_bridges;
 use crate::runtime::symbol_registry::SymbolRegistry;
 use crate::typecheck::{EnumLayout, TypeInfo};
-use ast::nodes::{Expr, Node, Program, Statement};
+use ast::nodes::{Block, Expr, FStringPart, Function, Node, Program, Statement};
+use common::Span;
 
 pub mod expr;
 pub mod stmt;
@@ -41,10 +42,14 @@ pub struct Compiler<'ctx> {
     pub(crate) function_return_types: HashMap<String, OtterType>,
     #[allow(dead_code)]
     pub(crate) expr_types: HashMap<usize, TypeInfo>,
+    expr_types_by_span: HashMap<Span, TypeInfo>,
+    pub(crate) comprehension_var_types: HashMap<Span, TypeInfo>,
+    expr_spans: HashMap<usize, Span>,
     pub(crate) enum_layouts: HashMap<String, EnumLayout>,
     pub(crate) function_defaults: HashMap<String, Vec<Option<Expr>>>,
     #[allow(dead_code)]
     pub(crate) lambda_counter: AtomicUsize,
+    next_spawn_id: u64,
     struct_ids: HashMap<String, u32>,
     struct_infos: Vec<StructInfo<'ctx>>,
     pub cached_ir: Option<String>,
@@ -53,12 +58,167 @@ pub struct Compiler<'ctx> {
 use crate::codegen::llvm::config::CodegenOptLevel;
 
 impl<'ctx> Compiler<'ctx> {
+    fn record_function_spans(&mut self, func: &Function) {
+        self.record_block_spans(func.body.as_ref());
+    }
+
+    fn record_block_spans(&mut self, block: &Block) {
+        for stmt in &block.statements {
+            self.record_statement_spans(stmt.as_ref());
+        }
+    }
+
+    fn record_statement_spans(&mut self, stmt: &Statement) {
+        match stmt {
+            Statement::Expr(expr)
+            | Statement::Let { expr, .. }
+            | Statement::Assignment { expr, .. } => self.record_expr_spans(expr),
+            Statement::Return(Some(expr)) => self.record_expr_spans(expr),
+            Statement::Return(None)
+            | Statement::Break
+            | Statement::Continue
+            | Statement::Pass
+            | Statement::Use { .. }
+            | Statement::PubUse { .. }
+            | Statement::Enum { .. }
+            | Statement::TypeAlias { .. } => {}
+            Statement::Struct { methods, .. } => {
+                for method in methods {
+                    self.record_function_spans(method.as_ref());
+                }
+            }
+            Statement::Function(func) => self.record_function_spans(func.as_ref()),
+            Statement::If {
+                cond,
+                then_block,
+                elif_blocks,
+                else_block,
+            } => {
+                self.record_expr_spans(cond);
+                self.record_block_spans(then_block.as_ref());
+                for (elif_cond, block) in elif_blocks {
+                    self.record_expr_spans(elif_cond);
+                    self.record_block_spans(block.as_ref());
+                }
+                if let Some(block) = else_block {
+                    self.record_block_spans(block.as_ref());
+                }
+            }
+            Statement::For { iterable, body, .. } => {
+                self.record_expr_spans(iterable);
+                self.record_block_spans(body.as_ref());
+            }
+            Statement::While { cond, body } => {
+                self.record_expr_spans(cond);
+                self.record_block_spans(body.as_ref());
+            }
+            Statement::Block(block) => self.record_block_spans(block.as_ref()),
+        }
+    }
+
+    fn record_expr_spans(&mut self, expr: &Node<Expr>) {
+        let ptr = expr.as_ref() as *const Expr as usize;
+        self.expr_spans.insert(ptr, *expr.span());
+
+        match expr.as_ref() {
+            Expr::Literal(_) | Expr::Identifier(_) => {}
+            Expr::Binary { left, right, .. } => {
+                self.record_expr_spans(left);
+                self.record_expr_spans(right);
+            }
+            Expr::Unary { expr, .. } => self.record_expr_spans(expr),
+            Expr::Call { func, args } => {
+                self.record_expr_spans(func);
+                for arg in args {
+                    self.record_expr_spans(arg);
+                }
+            }
+            Expr::Member { object, .. } => self.record_expr_spans(object),
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                self.record_expr_spans(cond);
+                self.record_expr_spans(then_branch);
+                if let Some(expr) = else_branch {
+                    self.record_expr_spans(expr);
+                }
+            }
+            Expr::Match { value, arms } => {
+                self.record_expr_spans(value);
+                for arm in arms {
+                    if let Some(guard) = &arm.as_ref().guard {
+                        self.record_expr_spans(guard);
+                    }
+                    self.record_block_spans(arm.as_ref().body.as_ref());
+                }
+            }
+            Expr::Range { start, end } => {
+                self.record_expr_spans(start);
+                self.record_expr_spans(end);
+            }
+            Expr::Array(elements) => {
+                for elem in elements {
+                    self.record_expr_spans(elem);
+                }
+            }
+            Expr::Dict(pairs) => {
+                for (key, value) in pairs {
+                    self.record_expr_spans(key);
+                    self.record_expr_spans(value);
+                }
+            }
+            Expr::ListComprehension {
+                element,
+                iterable,
+                condition,
+                ..
+            } => {
+                self.record_expr_spans(element);
+                self.record_expr_spans(iterable);
+                if let Some(cond) = condition {
+                    self.record_expr_spans(cond);
+                }
+            }
+            Expr::DictComprehension {
+                key,
+                value,
+                iterable,
+                condition,
+                ..
+            } => {
+                self.record_expr_spans(key);
+                self.record_expr_spans(value);
+                self.record_expr_spans(iterable);
+                if let Some(cond) = condition {
+                    self.record_expr_spans(cond);
+                }
+            }
+            Expr::FString { parts } => {
+                for part in parts {
+                    if let FStringPart::Expr(expr) = part.as_ref() {
+                        self.record_expr_spans(expr);
+                    }
+                }
+            }
+            Expr::Await(expr) | Expr::Spawn(expr) => self.record_expr_spans(expr),
+            Expr::Struct { fields, .. } => {
+                for (_, value) in fields {
+                    self.record_expr_spans(value);
+                }
+            }
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         context: &'ctx InkwellContext,
         module: Module<'ctx>,
         builder: Builder<'ctx>,
         symbol_registry: &'static SymbolRegistry,
         expr_types: HashMap<usize, TypeInfo>,
+        expr_types_by_span: HashMap<Span, TypeInfo>,
+        comprehension_var_types: HashMap<Span, TypeInfo>,
         enum_layouts: HashMap<String, EnumLayout>,
     ) -> Self {
         let fpm = PassManager::create(&module);
@@ -83,9 +243,13 @@ impl<'ctx> Compiler<'ctx> {
             declared_functions: HashMap::new(),
             function_return_types: HashMap::new(),
             expr_types,
+            expr_types_by_span,
+            comprehension_var_types,
+            expr_spans: HashMap::new(),
             enum_layouts,
             function_defaults: HashMap::new(),
             lambda_counter: AtomicUsize::new(0),
+            next_spawn_id: 0,
             struct_ids: HashMap::new(),
             struct_infos: Vec::new(),
             cached_ir: None,
@@ -98,7 +262,11 @@ impl<'ctx> Compiler<'ctx> {
 
     pub(crate) fn expr_type(&self, expr: &Expr) -> Option<&TypeInfo> {
         let id = expr as *const Expr as usize;
-        self.expr_types.get(&id)
+        self.expr_types.get(&id).or_else(|| {
+            self.expr_spans
+                .get(&id)
+                .and_then(|span| self.expr_types_by_span.get(span))
+        })
     }
 
     pub(crate) fn enum_layout(&self, name: &str) -> Option<&EnumLayout> {
@@ -147,12 +315,26 @@ impl<'ctx> Compiler<'ctx> {
         let Some(first_param) = method_func.params.first_mut() else {
             return;
         };
-        let Some(ty) = first_param.as_ref().ty.as_ref() else {
-            return;
-        };
 
-        if matches!(ty.as_ref(), ast::nodes::Type::Simple(name) if name == "Self") {
+        // If the first parameter explicitly references `Self`, rewrite it to the
+        // concrete struct name. This keeps the existing behavior but allows the
+        // later logic to assume `self` always has a known type.
+        if let Some(ty) = first_param.as_ref().ty.as_ref()
+            && matches!(ty.as_ref(), ast::nodes::Type::Simple(name) if name == "Self")
+        {
             let span = *ty.span();
+            let replacement = ast::nodes::Type::Simple(struct_name.to_string());
+            first_param.as_mut().ty = Some(Node::new(replacement, span));
+            return;
+        }
+
+        // Methods commonly omit an explicit type on `self`. Ensure it is treated as the
+        // enclosing struct so later codegen knows the correct OtterType instead of
+        // defaulting to i64.
+        let param_name_is_self = first_param.as_ref().name.as_ref() == "self";
+        let has_type = first_param.as_ref().ty.is_some();
+        if param_name_is_self && !has_type {
+            let span = *first_param.as_ref().name.span();
             let replacement = ast::nodes::Type::Simple(struct_name.to_string());
             first_param.as_mut().ty = Some(Node::new(replacement, span));
         }
@@ -169,6 +351,10 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     pub fn compile_module(&mut self, program: &Program) -> Result<()> {
+        for statement in &program.statements {
+            self.record_statement_spans(statement.as_ref());
+        }
+
         // Prepare Rust bridges
         let _libraries = prepare_rust_bridges(program, self.symbol_registry)?;
 
@@ -217,6 +403,7 @@ impl<'ctx> Compiler<'ctx> {
         for statement in &program.statements {
             match statement.as_ref() {
                 Statement::Function(func) => {
+                    self.record_function_spans(func.as_ref());
                     self.compile_function(func.as_ref())?;
                 }
                 Statement::Struct { name, methods, .. } => {
@@ -224,6 +411,7 @@ impl<'ctx> Compiler<'ctx> {
                         let mut method_func = method.as_ref().clone();
                         method_func.name = format!("{}_{}", name, method_func.name);
                         self.rewrite_method_self_param(&mut method_func, name);
+                        self.record_function_spans(&method_func);
                         self.compile_function(&method_func)?;
                     }
                 }
@@ -344,17 +532,23 @@ impl<'ctx> Compiler<'ctx> {
                 "bool" => OtterType::Bool,
                 "string" | "str" => OtterType::Str,
                 "unit" | "void" => OtterType::Unit,
-                "list" | "List" => OtterType::List,
+                "list" | "List" => OtterType::opaque_list(),
                 "map" | "Map" => OtterType::Map,
                 other => self
                     .struct_id(other)
                     .map(OtterType::Struct)
                     .unwrap_or(OtterType::Opaque),
             },
-            ast::nodes::Type::Generic { base, .. } => {
+            ast::nodes::Type::Generic { base, args, .. } => {
                 // Handle generic types like list<str>, map<str, int>, etc.
                 match base.as_str() {
-                    "list" | "List" => OtterType::List,
+                    "list" | "List" => {
+                        let element = args
+                            .first()
+                            .map(|arg| self.otter_type_from_annotation(arg.as_ref()))
+                            .unwrap_or(OtterType::Opaque);
+                        OtterType::list_of(element)
+                    }
                     "map" | "Map" => OtterType::Map,
                     _ => OtterType::Opaque,
                 }
@@ -479,13 +673,13 @@ impl<'ctx> Compiler<'ctx> {
             let param_name = &param.as_ref().name;
 
             // Determine type from AST or default to I64
-            let llvm_type = if let Some(ty) = &param.as_ref().ty {
-                self.map_ast_type(ty.as_ref())?
+            let (_llvm_type, otter_type) = if let Some(ty) = &param.as_ref().ty {
+                let llvm_ty = self.map_ast_type(ty.as_ref())?;
+                let otter_ty = self.otter_type_from_annotation(ty.as_ref());
+                (llvm_ty, otter_ty)
             } else {
-                self.context.i64_type().into()
+                (self.context.i64_type().into(), OtterType::I64)
             };
-
-            let otter_type = self.otter_type_from_basic_type(llvm_type);
 
             // Allocate stack space for parameter
             let alloca = self.create_entry_block_alloca(

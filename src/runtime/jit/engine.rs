@@ -153,11 +153,19 @@ impl JitEngine {
             .check_program(program)
             .context("Type checking failed during JIT compilation")?;
         let enum_layouts = type_checker.enum_layouts();
-        let expr_types = type_checker.into_expr_type_map();
+        let (expr_types, expr_types_by_span, comprehension_var_types) =
+            type_checker.into_type_maps();
 
-        let artifact =
-            build_shared_library(program, &expr_types, &enum_layouts, &lib_path, &options)
-                .context("Failed to compile program to shared library")?;
+        let artifact = build_shared_library(
+            program,
+            &expr_types,
+            &expr_types_by_span,
+            &comprehension_var_types,
+            &enum_layouts,
+            &lib_path,
+            &options,
+        )
+        .context("Failed to compile program to shared library")?;
 
         let lib_path = artifact.binary;
 
@@ -329,11 +337,19 @@ impl JitEngine {
             .check_program(program)
             .context("Type checking failed during optimized JIT compilation")?;
         let enum_layouts = type_checker.enum_layouts();
-        let expr_types = type_checker.into_expr_type_map();
+        let (expr_types, expr_types_by_span, comprehension_var_types) =
+            type_checker.into_type_maps();
 
-        let artifact =
-            build_shared_library(program, &expr_types, &enum_layouts, &lib_path, &options)
-                .context("Failed to recompile with optimizations")?;
+        let artifact = build_shared_library(
+            program,
+            &expr_types,
+            &expr_types_by_span,
+            &comprehension_var_types,
+            &enum_layouts,
+            &lib_path,
+            &options,
+        )
+        .context("Failed to recompile with optimizations")?;
 
         let lib_path = artifact.binary;
 

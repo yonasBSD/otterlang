@@ -412,7 +412,7 @@ pub fn compile_pipeline(
     }
 
     let enum_layouts = type_checker.enum_layouts();
-    let expr_types = type_checker.into_expr_type_map();
+    let (expr_types, expr_types_by_span, comprehension_var_types) = type_checker.into_type_maps();
 
     // Update inputs with module dependencies for accurate cache fingerprinting
     inputs.imports = module_deps
@@ -451,6 +451,8 @@ pub fn compile_pipeline(
         build_executable(
             &program,
             &expr_types,
+            &expr_types_by_span,
+            &comprehension_var_types,
             &enum_layouts,
             &binary_path,
             &codegen_options,

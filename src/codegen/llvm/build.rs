@@ -5,6 +5,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use ast::nodes::Program;
+use common::Span;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context as LlvmContext;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target};
@@ -128,6 +129,8 @@ fn ensure_runtime_library() -> Result<PathBuf> {
 pub fn build_executable(
     program: &Program,
     expr_types: &HashMap<usize, TypeInfo>,
+    expr_types_by_span: &HashMap<Span, TypeInfo>,
+    comprehension_var_types: &HashMap<Span, TypeInfo>,
     enum_layouts: &HashMap<String, EnumLayout>,
     output: &Path,
     options: &CodegenOptions,
@@ -143,6 +146,8 @@ pub fn build_executable(
         builder,
         registry,
         expr_types.clone(),
+        expr_types_by_span.clone(),
+        comprehension_var_types.clone(),
         enum_layouts.clone(),
     );
 
@@ -471,6 +476,8 @@ pub fn build_executable(
 pub fn build_shared_library(
     program: &Program,
     expr_types: &HashMap<usize, TypeInfo>,
+    expr_types_by_span: &HashMap<Span, TypeInfo>,
+    comprehension_var_types: &HashMap<Span, TypeInfo>,
     enum_layouts: &HashMap<String, EnumLayout>,
     output: &Path,
     options: &CodegenOptions,
@@ -486,6 +493,8 @@ pub fn build_shared_library(
         builder,
         registry,
         expr_types.clone(),
+        expr_types_by_span.clone(),
+        comprehension_var_types.clone(),
         enum_layouts.clone(),
     );
 

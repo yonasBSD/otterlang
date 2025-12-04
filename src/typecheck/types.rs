@@ -709,6 +709,14 @@ impl TypeContext {
     pub fn normalize_type(&self, ty: TypeInfo) -> TypeInfo {
         match ty {
             TypeInfo::Generic { base, args } => {
+                if args.is_empty()
+                    && let Some(struct_def) = self.structs.get(&base)
+                {
+                    return TypeInfo::Struct {
+                        name: struct_def.name.clone(),
+                        fields: struct_def.fields.clone(),
+                    };
+                }
                 if let Some(enum_ty) = self.build_enum_type(&base, args.clone()) {
                     enum_ty
                 } else {

@@ -1,15 +1,416 @@
 use anyhow::{Result, anyhow, bail};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
-use inkwell::types::BasicTypeEnum;
+use inkwell::types::{BasicTypeEnum, PointerType, StructType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue};
+use std::collections::BTreeSet;
 
 use crate::codegen::llvm::compiler::Compiler;
-use crate::codegen::llvm::compiler::types::{EvaluatedValue, FunctionContext, OtterType};
+use crate::codegen::llvm::compiler::types::{EvaluatedValue, FunctionContext, OtterType, Variable};
 use crate::typecheck::TypeInfo;
-use ast::nodes::{BinaryOp, Block, Expr, Literal, Node, Statement, UnaryOp};
+use ast::nodes::{BinaryOp, Block, Expr, FStringPart, Literal, Node, Statement, UnaryOp};
+
+struct CapturedVariable<'ctx> {
+    name: String,
+    ty: OtterType,
+    llvm_ty: BasicTypeEnum<'ctx>,
+}
 
 impl<'ctx> Compiler<'ctx> {
+    fn eval_await_expr(
+        &mut self,
+        expr: &Expr,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        let handle = self.eval_expr(expr, ctx)?;
+        let value = handle
+            .value
+            .ok_or_else(|| anyhow!("await expects a task handle value"))?;
+        let join_fn = self.get_or_declare_ffi_function("task.join")?;
+        self.builder
+            .build_call(join_fn, &[value.into()], "task_join")?;
+        Ok(EvaluatedValue {
+            ty: OtterType::Unit,
+            value: None,
+        })
+    }
+
+    fn eval_spawn_expr(
+        &mut self,
+        expr: &Expr,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        let mut captured = BTreeSet::new();
+        self.collect_captured_names(expr, ctx, &mut captured);
+        let capture_names: Vec<String> = captured.into_iter().collect();
+
+        let mut capture_fields = Vec::new();
+        for name in capture_names {
+            if let Some(var) = ctx.get(&name)
+                && let Some(llvm_ty) = self.basic_type(var.ty.clone())?
+            {
+                capture_fields.push(CapturedVariable {
+                    name,
+                    ty: var.ty.clone(),
+                    llvm_ty,
+                });
+            }
+        }
+
+        let context_struct = if capture_fields.is_empty() {
+            None
+        } else {
+            let field_types: Vec<BasicTypeEnum> =
+                capture_fields.iter().map(|field| field.llvm_ty).collect();
+            Some(self.context.struct_type(&field_types, false))
+        };
+
+        let spawn_id = self.next_spawn_id;
+        self.next_spawn_id += 1;
+
+        let wrapper = self.build_spawn_wrapper(spawn_id, expr, context_struct, &capture_fields)?;
+
+        if let Some(struct_type) = context_struct {
+            let context_ptr = self.builder.build_malloc(struct_type, "spawn_ctx")?;
+            for (index, field) in capture_fields.iter().enumerate() {
+                let var = ctx.get(&field.name).ok_or_else(|| {
+                    anyhow!("captured variable '{}' missing from scope", field.name)
+                })?;
+                let loaded = self
+                    .builder
+                    .build_load(field.llvm_ty, var.ptr, &field.name)?;
+                let field_ptr = self.builder.build_struct_gep(
+                    struct_type,
+                    context_ptr,
+                    index as u32,
+                    &format!("spawn_ctx_field_{}", field.name),
+                )?;
+                self.builder.build_store(field_ptr, loaded)?;
+            }
+            let raw_ptr = self
+                .builder
+                .build_pointer_cast(context_ptr, self.raw_ptr_type(), "spawn_ctx_raw")?;
+            let push_fn = self.get_spawn_context_push_fn();
+            let id_const = self.context.i64_type().const_int(spawn_id, false);
+            self.builder
+                .build_call(push_fn, &[id_const.into(), raw_ptr.into()], "")?;
+        }
+
+        let spawn_fn = self.get_task_spawn_fn();
+        let callback_ptr = wrapper.as_global_value().as_pointer_value();
+        let handle = self
+            .builder
+            .build_call(spawn_fn, &[callback_ptr.into()], "task_handle")?
+            .try_as_basic_value()
+            .left()
+            .ok_or_else(|| anyhow!("task.spawn did not return a handle"))?;
+
+        Ok(EvaluatedValue::with_value(handle, OtterType::Opaque))
+    }
+
+    fn build_spawn_wrapper(
+        &mut self,
+        spawn_id: u64,
+        expr: &Expr,
+        context_type: Option<StructType<'ctx>>,
+        captures: &[CapturedVariable<'ctx>],
+    ) -> Result<FunctionValue<'ctx>> {
+        let fn_name = format!("spawn_wrapper_{}", spawn_id);
+        let fn_type = self.context.void_type().fn_type(&[], false);
+        let function = self.module.add_function(&fn_name, fn_type, None);
+        let entry = self.context.append_basic_block(function, "entry");
+        let prev_block = self.builder.get_insert_block();
+        self.builder.position_at_end(entry);
+
+        let mut wrapper_ctx = FunctionContext::new();
+        let mut raw_ptr: Option<inkwell::values::PointerValue<'ctx>> = None;
+
+        if let Some(struct_type) = context_type {
+            let pop_fn = self.get_spawn_context_pop_fn();
+            let id_const = self.context.i64_type().const_int(spawn_id, false);
+            let value = self
+                .builder
+                .build_call(pop_fn, &[id_const.into()], "spawn_ctx_raw")?
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("spawn context queue returned null"))?
+                .into_pointer_value();
+            raw_ptr = Some(value);
+            let typed_ptr = self
+                .builder
+                .build_pointer_cast(value, self.struct_ptr_type(struct_type), "spawn_ctx")?;
+
+            for (index, field) in captures.iter().enumerate() {
+                let field_ptr = self.builder.build_struct_gep(
+                    struct_type,
+                    typed_ptr,
+                    index as u32,
+                    &format!("spawn_capture_gep_{}", field.name),
+                )?;
+                let loaded = self
+                    .builder
+                    .build_load(field.llvm_ty, field_ptr, &field.name)?;
+                let alloca =
+                    self.create_entry_block_alloca(function, &field.name, field.ty.clone())?;
+                self.builder.build_store(alloca, loaded)?;
+                wrapper_ctx.insert(
+                    field.name.clone(),
+                    Variable {
+                        ptr: alloca,
+                        ty: field.ty.clone(),
+                    },
+                );
+            }
+        }
+
+        let _ = self.eval_expr(expr, &mut wrapper_ctx)?;
+
+        if let Some(ptr) = raw_ptr {
+            self.builder.build_free(ptr)?;
+        }
+
+        self.builder.build_return(None)?;
+
+        if let Some(block) = prev_block {
+            self.builder.position_at_end(block);
+        }
+
+        Ok(function)
+    }
+
+    fn collect_captured_names(
+        &self,
+        expr: &Expr,
+        ctx: &FunctionContext<'ctx>,
+        captures: &mut BTreeSet<String>,
+    ) {
+        match expr {
+            Expr::Literal(_) => {}
+            Expr::Identifier(name) => {
+                if ctx.get(name).is_some() {
+                    captures.insert(name.clone());
+                }
+            }
+            Expr::Member { object, .. } => {
+                self.collect_captured_names(object.as_ref().as_ref(), ctx, captures);
+            }
+            Expr::Call { func, args } => {
+                self.collect_captured_names(func.as_ref().as_ref(), ctx, captures);
+                for arg in args {
+                    self.collect_captured_names(arg.as_ref(), ctx, captures);
+                }
+            }
+            Expr::Binary { left, right, .. } => {
+                self.collect_captured_names(left.as_ref().as_ref(), ctx, captures);
+                self.collect_captured_names(right.as_ref().as_ref(), ctx, captures);
+            }
+            Expr::Unary { expr, .. } => {
+                self.collect_captured_names(expr.as_ref().as_ref(), ctx, captures);
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                self.collect_captured_names(cond.as_ref().as_ref(), ctx, captures);
+                self.collect_captured_names(then_branch.as_ref().as_ref(), ctx, captures);
+                if let Some(expr) = else_branch {
+                    self.collect_captured_names(expr.as_ref().as_ref(), ctx, captures);
+                }
+            }
+            Expr::Match { value, arms } => {
+                self.collect_captured_names(value.as_ref().as_ref(), ctx, captures);
+                for arm in arms {
+                    if let Some(guard) = &arm.as_ref().guard {
+                        self.collect_captured_names(guard.as_ref(), ctx, captures);
+                    }
+                    self.collect_captured_names_in_block(arm.as_ref().body.as_ref(), ctx, captures);
+                }
+            }
+            Expr::Range { start, end } => {
+                self.collect_captured_names(start.as_ref().as_ref(), ctx, captures);
+                self.collect_captured_names(end.as_ref().as_ref(), ctx, captures);
+            }
+            Expr::Array(elements) => {
+                for element in elements {
+                    self.collect_captured_names(element.as_ref(), ctx, captures);
+                }
+            }
+            Expr::Dict(pairs) => {
+                for (key, value) in pairs {
+                    self.collect_captured_names(key.as_ref(), ctx, captures);
+                    self.collect_captured_names(value.as_ref(), ctx, captures);
+                }
+            }
+            Expr::ListComprehension {
+                element,
+                iterable,
+                condition,
+                ..
+            } => {
+                self.collect_captured_names(element.as_ref().as_ref(), ctx, captures);
+                self.collect_captured_names(iterable.as_ref().as_ref(), ctx, captures);
+                if let Some(cond) = condition {
+                    self.collect_captured_names(cond.as_ref().as_ref(), ctx, captures);
+                }
+            }
+            Expr::DictComprehension {
+                key,
+                value,
+                iterable,
+                condition,
+                ..
+            } => {
+                self.collect_captured_names(key.as_ref().as_ref(), ctx, captures);
+                self.collect_captured_names(value.as_ref().as_ref(), ctx, captures);
+                self.collect_captured_names(iterable.as_ref().as_ref(), ctx, captures);
+                if let Some(cond) = condition {
+                    self.collect_captured_names(cond.as_ref().as_ref(), ctx, captures);
+                }
+            }
+            Expr::FString { parts } => {
+                for part in parts {
+                    if let FStringPart::Expr(expr) = part.as_ref() {
+                        self.collect_captured_names(expr.as_ref(), ctx, captures);
+                    }
+                }
+            }
+            Expr::Struct { fields, .. } => {
+                for (_, value) in fields {
+                    self.collect_captured_names(value.as_ref(), ctx, captures);
+                }
+            }
+            Expr::Await(inner) | Expr::Spawn(inner) => {
+                self.collect_captured_names(inner.as_ref().as_ref(), ctx, captures);
+            }
+        }
+    }
+
+    fn collect_captured_names_in_block(
+        &self,
+        block: &Block,
+        ctx: &FunctionContext<'ctx>,
+        captures: &mut BTreeSet<String>,
+    ) {
+        for stmt in &block.statements {
+            self.collect_captured_names_in_statement(stmt.as_ref(), ctx, captures);
+        }
+    }
+
+    fn collect_captured_names_in_statement(
+        &self,
+        stmt: &Statement,
+        ctx: &FunctionContext<'ctx>,
+        captures: &mut BTreeSet<String>,
+    ) {
+        match stmt {
+            Statement::Expr(expr)
+            | Statement::Let { expr, .. }
+            | Statement::Assignment { expr, .. } => {
+                self.collect_captured_names(expr.as_ref(), ctx, captures)
+            }
+            Statement::Return(Some(expr)) => {
+                self.collect_captured_names(expr.as_ref(), ctx, captures)
+            }
+            Statement::If {
+                cond,
+                then_block,
+                elif_blocks,
+                else_block,
+            } => {
+                self.collect_captured_names(cond.as_ref(), ctx, captures);
+                self.collect_captured_names_in_block(then_block.as_ref(), ctx, captures);
+                for (elif_cond, block) in elif_blocks {
+                    self.collect_captured_names(elif_cond.as_ref(), ctx, captures);
+                    self.collect_captured_names_in_block(block.as_ref(), ctx, captures);
+                }
+                if let Some(block) = else_block {
+                    self.collect_captured_names_in_block(block.as_ref(), ctx, captures);
+                }
+            }
+            Statement::For { iterable, body, .. } => {
+                self.collect_captured_names(iterable.as_ref(), ctx, captures);
+                self.collect_captured_names_in_block(body.as_ref(), ctx, captures);
+            }
+            Statement::While { cond, body } => {
+                self.collect_captured_names(cond.as_ref(), ctx, captures);
+                self.collect_captured_names_in_block(body.as_ref(), ctx, captures);
+            }
+            Statement::Block(block) => {
+                self.collect_captured_names_in_block(block.as_ref(), ctx, captures)
+            }
+            Statement::Return(None)
+            | Statement::Break
+            | Statement::Continue
+            | Statement::Pass
+            | Statement::Use { .. }
+            | Statement::PubUse { .. }
+            | Statement::Struct { .. }
+            | Statement::Enum { .. }
+            | Statement::TypeAlias { .. }
+            | Statement::Function(_) => {}
+        }
+    }
+
+    fn get_spawn_context_push_fn(&mut self) -> FunctionValue<'ctx> {
+        if let Some(func) = self.declared_functions.get("__spawn_context_push") {
+            return *func;
+        }
+        let ptr_ty = self.raw_ptr_type();
+        let fn_type = self
+            .context
+            .void_type()
+            .fn_type(&[self.context.i64_type().into(), ptr_ty.into()], false);
+        let function = self
+            .module
+            .add_function("otter_spawn_context_push", fn_type, None);
+        self.declared_functions
+            .insert("__spawn_context_push".to_string(), function);
+        function
+    }
+
+    fn get_spawn_context_pop_fn(&mut self) -> FunctionValue<'ctx> {
+        if let Some(func) = self.declared_functions.get("__spawn_context_pop") {
+            return *func;
+        }
+        let ptr_ty = self.raw_ptr_type();
+        let fn_type = ptr_ty.fn_type(&[self.context.i64_type().into()], false);
+        let function = self
+            .module
+            .add_function("otter_spawn_context_pop", fn_type, None);
+        self.declared_functions
+            .insert("__spawn_context_pop".to_string(), function);
+        function
+    }
+
+    fn get_task_spawn_fn(&mut self) -> FunctionValue<'ctx> {
+        if let Some(func) = self.declared_functions.get("__task_spawn") {
+            return *func;
+        }
+        let callback_type = self.context.void_type().fn_type(&[], false);
+        #[allow(deprecated)]
+        let callback_ptr = callback_type.ptr_type(AddressSpace::default());
+        let fn_type =
+            self.context.i64_type().fn_type(&[callback_ptr.into()], false);
+        let function = self.module.add_function("otter_task_spawn", fn_type, None);
+        self.declared_functions
+            .insert("__task_spawn".to_string(), function);
+        function
+    }
+
+    fn raw_ptr_type(&self) -> PointerType<'ctx> {
+        #[allow(deprecated)]
+        {
+            self.context.i8_type().ptr_type(AddressSpace::default())
+        }
+    }
+
+    fn struct_ptr_type(&self, ty: StructType<'ctx>) -> PointerType<'ctx> {
+        #[allow(deprecated)]
+        {
+            ty.ptr_type(AddressSpace::default())
+        }
+    }
     pub(crate) fn eval_expr(
         &mut self,
         expr: &Expr,
@@ -130,7 +531,41 @@ impl<'ctx> Compiler<'ctx> {
             } => self.eval_if_expr(expr, ctx),
             Expr::Match { value: _, arms: _ } => self.eval_match_expr(expr, ctx),
             Expr::FString { parts: _ } => self.eval_fstring_expr(expr, ctx),
-            Expr::Array(elements) => self.eval_array_expr(elements, ctx),
+            Expr::Array(elements) => {
+                let expr_id = expr as *const Expr as usize;
+                let expr_type = self.expr_types.get(&expr_id).cloned();
+                self.eval_array_expr(elements, expr_type.as_ref(), ctx)
+            }
+            Expr::ListComprehension {
+                element,
+                var,
+                iterable,
+                condition,
+            } => self.eval_list_comprehension(
+                expr,
+                element.as_ref().as_ref(),
+                var,
+                iterable.as_ref().as_ref(),
+                condition.as_ref().map(|c| c.as_ref().as_ref()),
+                ctx,
+            ),
+            Expr::DictComprehension {
+                key,
+                value,
+                var,
+                iterable,
+                condition,
+            } => self.eval_dict_comprehension(
+                expr,
+                key.as_ref().as_ref(),
+                value.as_ref().as_ref(),
+                var,
+                iterable.as_ref().as_ref(),
+                condition.as_ref().map(|c| c.as_ref().as_ref()),
+                ctx,
+            ),
+            Expr::Await(expr) => self.eval_await_expr(expr.as_ref().as_ref(), ctx),
+            Expr::Spawn(expr) => self.eval_spawn_expr(expr.as_ref().as_ref(), ctx),
             _ => bail!("Expression type not implemented: {:?}", expr),
         }
     }
@@ -558,14 +993,21 @@ impl<'ctx> Compiler<'ctx> {
                         .unwrap()
                         .get_parent()
                         .unwrap();
-                    let alloca =
-                        self.create_entry_block_alloca(function, rest_name, OtterType::List)?;
+                    let rest_list_type = element_type
+                        .as_ref()
+                        .and_then(|ty| self.typeinfo_to_otter_type(ty))
+                        .unwrap_or_else(OtterType::opaque_list);
+                    let alloca = self.create_entry_block_alloca(
+                        function,
+                        rest_name,
+                        rest_list_type.clone(),
+                    )?;
                     self.builder.build_store(alloca, handle)?;
                     ctx.insert(
                         rest_name.clone(),
                         crate::codegen::llvm::compiler::types::Variable {
                             ptr: alloca,
-                            ty: OtterType::List,
+                            ty: rest_list_type,
                         },
                     );
                     self.builder.build_unconditional_branch(success_bb)?;
@@ -1081,7 +1523,7 @@ impl<'ctx> Compiler<'ctx> {
             OtterType::F64 => Ok(Some(self.context.f64_type().into())),
             OtterType::Str => Ok(Some(self.string_ptr_type.into())),
             OtterType::Opaque => Ok(Some(self.context.i64_type().into())),
-            OtterType::List => Ok(Some(self.context.i64_type().into())),
+            OtterType::List(_) => Ok(Some(self.context.i64_type().into())),
             OtterType::Map => Ok(Some(self.context.i64_type().into())),
             OtterType::Struct(id) => Ok(Some(self.struct_info(id).ty.into())),
             OtterType::Tuple(fields) => {
@@ -1115,6 +1557,10 @@ impl<'ctx> Compiler<'ctx> {
     ) -> Result<inkwell::values::BasicValueEnum<'ctx>> {
         // If types match, no coercion needed
         if from_ty == to_ty {
+            return Ok(value);
+        }
+
+        if matches!((&from_ty, &to_ty), (OtterType::List(_), OtterType::List(_))) {
             return Ok(value);
         }
 
@@ -1218,8 +1664,8 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             // List/Map conversions (treat as opaque pointers)
-            (OtterType::List | OtterType::Map, OtterType::Opaque)
-            | (OtterType::Opaque, OtterType::List | OtterType::Map) => {
+            (OtterType::List(_) | OtterType::Map, OtterType::Opaque)
+            | (OtterType::Opaque, OtterType::List(_) | OtterType::Map) => {
                 Ok(value) // Already same representation
             }
 
@@ -1255,7 +1701,7 @@ impl<'ctx> Compiler<'ctx> {
                 .ok_or_else(|| anyhow!("Cannot determine current function for argument cast"))?;
             let tmp = self.create_entry_block_alloca(current_function, "struct_cast", from_ty)?;
             self.builder.build_store(tmp, value)?;
-            let generic_ptr = self.context.ptr_type(AddressSpace::default());
+            let generic_ptr = self.raw_ptr_type();
             let cast_ptr = self
                 .builder
                 .build_bit_cast(tmp, generic_ptr, "struct_cast_ptr")?
@@ -1291,7 +1737,7 @@ impl<'ctx> Compiler<'ctx> {
                     if let Ok(evaluated) = self.eval_expr(object.as_ref().as_ref(), ctx) {
                         if evaluated.value.is_some() {
                             // Check if it's a list type and handle list methods
-                            if let OtterType::List = evaluated.ty.clone() {
+                            if matches!(evaluated.ty, OtterType::List(_)) {
                                 if field == "append" && !args.is_empty() {
                                     // Determine the append function based on argument type
                                     let arg_val = self.eval_expr(args[0].as_ref(), ctx)?;
@@ -1302,7 +1748,7 @@ impl<'ctx> Compiler<'ctx> {
                                         }
                                         OtterType::F64 => "append<list,float>".to_string(),
                                         OtterType::Bool => "append<list,bool>".to_string(),
-                                        OtterType::List | OtterType::Opaque => {
+                                        OtterType::List(_) | OtterType::Opaque => {
                                             "append<list,list>".to_string()
                                         }
                                         _ => bail!(
@@ -1391,7 +1837,7 @@ impl<'ctx> Compiler<'ctx> {
                         }
 
                         // Check if it's a list type and handle list methods
-                        if let OtterType::List = evaluated.ty.clone() {
+                        if matches!(evaluated.ty, OtterType::List(_)) {
                             // Handle list method calls like list.append()
                             if field == "append" && !args.is_empty() {
                                 // Determine the append function based on argument type
@@ -1403,7 +1849,7 @@ impl<'ctx> Compiler<'ctx> {
                                     }
                                     OtterType::F64 => "append<list,float>".to_string(),
                                     OtterType::Bool => "append<list,bool>".to_string(),
-                                    OtterType::List | OtterType::Opaque => {
+                                    OtterType::List(_) | OtterType::Opaque => {
                                         "append<list,list>".to_string()
                                     }
                                     _ => {
@@ -1447,7 +1893,7 @@ impl<'ctx> Compiler<'ctx> {
                     let arg_val = self.eval_expr(args[0].as_ref(), ctx)?;
                     let overloaded_name = match arg_val.ty {
                         OtterType::Str => "len".to_string(),
-                        OtterType::List => "len<list>".to_string(),
+                        OtterType::List(_) => "len<list>".to_string(),
                         OtterType::Map => "len<map>".to_string(),
                         _ => bail!("len() not supported for type {:?}", arg_val.ty),
                     };
@@ -1658,6 +2104,7 @@ impl<'ctx> Compiler<'ctx> {
     fn eval_array_expr(
         &mut self,
         elements: &[Node<Expr>],
+        expr_type: Option<&TypeInfo>,
         ctx: &mut FunctionContext<'ctx>,
     ) -> Result<EvaluatedValue<'ctx>> {
         // Create a new empty list
@@ -1676,29 +2123,600 @@ impl<'ctx> Compiler<'ctx> {
             let elem_value = elem_val
                 .value
                 .ok_or_else(|| anyhow!("array element {} produced no value", idx))?;
-
-            // Determine which append function to use based on element type
-            let append_fn_name = match elem_val.ty {
-                OtterType::Str => "append<list,string>",
-                OtterType::I64 | OtterType::I32 => "append<list,int>",
-                OtterType::F64 => "append<list,float>",
-                OtterType::Bool => "append<list,bool>",
-                OtterType::List | OtterType::Opaque => "append<list,list>",
-                _ => bail!("unsupported array element type: {:?}", elem_val.ty),
-            };
-
-            let append_fn = self.get_or_declare_ffi_function(append_fn_name)?;
-            let handle_arg: BasicMetadataValueEnum = handle.into();
-            let elem_arg: BasicMetadataValueEnum = elem_value.into();
-
-            self.builder.build_call(
-                append_fn,
-                &[handle_arg, elem_arg],
-                &format!("append_{}", idx),
-            )?;
+            self.append_value_to_list(handle, elem_value, elem_val.ty, &format!("append_{}", idx))?;
         }
 
-        Ok(EvaluatedValue::with_value(handle.into(), OtterType::List))
+        let list_ty = expr_type
+            .and_then(|ty| self.typeinfo_to_otter_type(ty))
+            .unwrap_or_else(OtterType::opaque_list);
+        Ok(EvaluatedValue::with_value(handle.into(), list_ty))
+    }
+
+    fn append_value_to_list(
+        &mut self,
+        list_handle: IntValue<'ctx>,
+        value: BasicValueEnum<'ctx>,
+        value_ty: OtterType,
+        label: &str,
+    ) -> Result<()> {
+        let (append_fn_name, expected_ty) = self.list_append_target(&value_ty)?;
+        let append_fn = self.get_or_declare_ffi_function(append_fn_name)?;
+        let coerced_value = self.coerce_type(value, value_ty, expected_ty)?;
+        let handle_arg: BasicMetadataValueEnum = list_handle.into();
+        let value_arg: BasicMetadataValueEnum = coerced_value.into();
+        self.builder
+            .build_call(append_fn, &[handle_arg, value_arg], label)?;
+        Ok(())
+    }
+
+    fn list_append_target(&self, ty: &OtterType) -> Result<(&'static str, OtterType)> {
+        match ty {
+            OtterType::Str => Ok(("append<list,string>", OtterType::Str)),
+            OtterType::I32 | OtterType::I64 => Ok(("append<list,int>", OtterType::I64)),
+            OtterType::F64 => Ok(("append<list,float>", OtterType::F64)),
+            OtterType::Bool => Ok(("append<list,bool>", OtterType::Bool)),
+            OtterType::List(_) => Ok(("append<list,list>", ty.clone())),
+            OtterType::Map => Ok(("append<list,map>", OtterType::Map)),
+            OtterType::Opaque => Ok(("append<list,list>", OtterType::opaque_list())),
+            _ => bail!("unsupported array element type: {:?}", ty),
+        }
+    }
+
+    fn eval_list_comprehension(
+        &mut self,
+        full_expr: &Expr,
+        element: &Expr,
+        var: &str,
+        iterable: &Expr,
+        condition: Option<&Expr>,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        let list_fn = self.get_or_declare_ffi_function("list.new")?;
+        let result_handle = self
+            .builder
+            .build_call(list_fn, &[], "list_comp_result")?
+            .try_as_basic_value()
+            .left()
+            .ok_or_else(|| anyhow!("list comprehension failed to create list"))?
+            .into_int_value();
+
+        let previous_binding = ctx.remove(var);
+        let mut inserted_new_binding = false;
+
+        let element_ty = self
+            .comprehension_element_type(full_expr)
+            .or_else(|| self.list_element_type(iterable))
+            .or_else(|| self.infer_comprehension_var_type(var, element, condition))
+            .unwrap_or(OtterType::Opaque);
+        let list_ty_from_element = OtterType::list_of(element_ty.clone());
+
+        let result_list_ty = self
+            .expr_type(full_expr)
+            .and_then(|ty| self.typeinfo_to_otter_type(ty))
+            .unwrap_or_else(|| list_ty_from_element.clone());
+
+        let result = (|| -> Result<EvaluatedValue<'ctx>> {
+            let iterable_val = self.eval_expr(iterable, ctx)?;
+            if !matches!(iterable_val.ty, OtterType::List(_)) {
+                bail!(
+                    "list comprehension expects list iterable, got {:?}",
+                    iterable_val.ty
+                );
+            }
+            let iterable_handle = iterable_val
+                .value
+                .ok_or_else(|| anyhow!("list comprehension iterable produced no value"))?;
+
+            let iter_create_fn = self.get_or_declare_ffi_function("__otter_iter_array")?;
+            let iter_has_next_fn =
+                self.get_or_declare_ffi_function("__otter_iter_has_next_array")?;
+            let iter_next_fn = self.get_or_declare_ffi_function("__otter_iter_next_array")?;
+            let iter_free_fn = self.get_or_declare_ffi_function("__otter_iter_free_array")?;
+
+            let iter_handle = self
+                .builder
+                .build_call(iter_create_fn, &[iterable_handle.into()], "list_comp_iter")?
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("iterator creation failed"))?;
+
+            let function = self
+                .builder
+                .get_insert_block()
+                .and_then(|b| b.get_parent())
+                .ok_or_else(|| anyhow!("no active function for list comprehension"))?;
+
+            let var_alloca = self.create_entry_block_alloca(function, var, element_ty.clone())?;
+            ctx.insert(
+                var.to_string(),
+                Variable {
+                    ptr: var_alloca,
+                    ty: element_ty.clone(),
+                },
+            );
+            inserted_new_binding = true;
+
+            let loop_cond_bb = self.context.append_basic_block(function, "listcomp_cond");
+            let loop_body_bb = self.context.append_basic_block(function, "listcomp_body");
+            let loop_cleanup_bb = self
+                .context
+                .append_basic_block(function, "listcomp_cleanup");
+            let loop_exit_bb = self.context.append_basic_block(function, "listcomp_exit");
+
+            self.builder.build_unconditional_branch(loop_cond_bb)?;
+
+            self.builder.position_at_end(loop_cond_bb);
+            let has_next_call = self.builder.build_call(
+                iter_has_next_fn,
+                &[iter_handle.into()],
+                "listcomp_has_next",
+            )?;
+            let has_next = has_next_call
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("iterator has_next returned void"))?
+                .into_int_value();
+            self.builder
+                .build_conditional_branch(has_next, loop_body_bb, loop_cleanup_bb)?;
+
+            self.builder.position_at_end(loop_body_bb);
+            let next_call =
+                self.builder
+                    .build_call(iter_next_fn, &[iter_handle.into()], "listcomp_next")?;
+            let element_val = next_call
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("iterator next returned void"))?;
+            let decoded = self.decode_and_convert_tagged_value(element_val, &element_ty)?;
+            if let Some(value) = decoded {
+                self.builder.build_store(var_alloca, value)?;
+            }
+
+            let loop_continue_bb = self
+                .context
+                .append_basic_block(function, "listcomp_continue");
+
+            if let Some(cond_expr) = condition {
+                let cond_val = self.eval_expr(cond_expr, ctx)?;
+                let cond_bool = self.to_bool_value(cond_val)?;
+                let append_bb = self.context.append_basic_block(function, "listcomp_append");
+                let skip_bb = self.context.append_basic_block(function, "listcomp_skip");
+                self.builder
+                    .build_conditional_branch(cond_bool, append_bb, skip_bb)?;
+
+                self.builder.position_at_end(append_bb);
+                self.emit_list_comprehension_append(result_handle, element, ctx)?;
+                self.builder.build_unconditional_branch(loop_continue_bb)?;
+
+                self.builder.position_at_end(skip_bb);
+                self.builder.build_unconditional_branch(loop_continue_bb)?;
+            } else {
+                self.emit_list_comprehension_append(result_handle, element, ctx)?;
+                self.builder.build_unconditional_branch(loop_continue_bb)?;
+            }
+
+            self.builder.position_at_end(loop_continue_bb);
+            self.builder.build_unconditional_branch(loop_cond_bb)?;
+
+            self.builder.position_at_end(loop_cleanup_bb);
+            self.builder
+                .build_call(iter_free_fn, &[iter_handle.into()], "listcomp_free")?;
+            self.builder.build_unconditional_branch(loop_exit_bb)?;
+
+            self.builder.position_at_end(loop_exit_bb);
+
+            Ok(EvaluatedValue::with_value(
+                result_handle.into(),
+                result_list_ty.clone(),
+            ))
+        })();
+
+        if inserted_new_binding {
+            ctx.remove(var);
+        }
+        if let Some(prev) = previous_binding {
+            ctx.insert(var.to_string(), prev);
+        }
+
+        result
+    }
+
+    fn emit_list_comprehension_append(
+        &mut self,
+        result_handle: IntValue<'ctx>,
+        element: &Expr,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<()> {
+        let elem_val = self.eval_expr(element, ctx)?;
+        let elem_value = elem_val
+            .value
+            .ok_or_else(|| anyhow!("list comprehension element produced no value"))?;
+        self.append_value_to_list(
+            result_handle,
+            elem_value,
+            elem_val.ty,
+            "listcomp_append_call",
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn eval_dict_comprehension(
+        &mut self,
+        full_expr: &Expr,
+        key: &Expr,
+        value: &Expr,
+        var: &str,
+        iterable: &Expr,
+        condition: Option<&Expr>,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<EvaluatedValue<'ctx>> {
+        let map_fn = self.get_or_declare_ffi_function("map.new")?;
+        let map_handle = self
+            .builder
+            .build_call(map_fn, &[], "dict_comp_result")?
+            .try_as_basic_value()
+            .left()
+            .ok_or_else(|| anyhow!("dict comprehension failed to create map"))?
+            .into_int_value();
+
+        let previous_binding = ctx.remove(var);
+        let mut inserted_new_binding = false;
+
+        let result = (|| -> Result<EvaluatedValue<'ctx>> {
+            let iterable_val = self.eval_expr(iterable, ctx)?;
+            if !matches!(iterable_val.ty, OtterType::List(_)) {
+                bail!(
+                    "dict comprehension expects list iterable, got {:?}",
+                    iterable_val.ty
+                );
+            }
+
+            let iterable_handle = iterable_val
+                .value
+                .ok_or_else(|| anyhow!("dict comprehension iterable produced no value"))?;
+
+            let iter_create_fn = self.get_or_declare_ffi_function("__otter_iter_array")?;
+            let iter_has_next_fn =
+                self.get_or_declare_ffi_function("__otter_iter_has_next_array")?;
+            let iter_next_fn = self.get_or_declare_ffi_function("__otter_iter_next_array")?;
+            let iter_free_fn = self.get_or_declare_ffi_function("__otter_iter_free_array")?;
+
+            let iter_handle = self
+                .builder
+                .build_call(iter_create_fn, &[iterable_handle.into()], "dict_comp_iter")?
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("iterator creation failed"))?;
+
+            let element_ty = self
+                .comprehension_element_type(full_expr)
+                .or_else(|| self.list_element_type(iterable))
+                .or_else(|| self.infer_comprehension_var_type(var, value, condition))
+                .unwrap_or(OtterType::Opaque);
+
+            let function = self
+                .builder
+                .get_insert_block()
+                .and_then(|b| b.get_parent())
+                .ok_or_else(|| anyhow!("no active function for dict comprehension"))?;
+
+            let var_alloca = self.create_entry_block_alloca(function, var, element_ty.clone())?;
+            ctx.insert(
+                var.to_string(),
+                Variable {
+                    ptr: var_alloca,
+                    ty: element_ty.clone(),
+                },
+            );
+            inserted_new_binding = true;
+
+            let loop_cond_bb = self.context.append_basic_block(function, "dictcomp_cond");
+            let loop_body_bb = self.context.append_basic_block(function, "dictcomp_body");
+            let loop_cleanup_bb = self
+                .context
+                .append_basic_block(function, "dictcomp_cleanup");
+            let loop_exit_bb = self.context.append_basic_block(function, "dictcomp_exit");
+
+            self.builder.build_unconditional_branch(loop_cond_bb)?;
+
+            self.builder.position_at_end(loop_cond_bb);
+            let has_next_call = self.builder.build_call(
+                iter_has_next_fn,
+                &[iter_handle.into()],
+                "dictcomp_has_next",
+            )?;
+            let has_next = has_next_call
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("iterator has_next returned void"))?
+                .into_int_value();
+            self.builder
+                .build_conditional_branch(has_next, loop_body_bb, loop_cleanup_bb)?;
+
+            self.builder.position_at_end(loop_body_bb);
+            let next_call =
+                self.builder
+                    .build_call(iter_next_fn, &[iter_handle.into()], "dictcomp_next")?;
+            let element_val = next_call
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| anyhow!("iterator next returned void"))?;
+            let decoded = self.decode_and_convert_tagged_value(element_val, &element_ty)?;
+            if let Some(value) = decoded {
+                self.builder.build_store(var_alloca, value)?;
+            }
+
+            let loop_continue_bb = self
+                .context
+                .append_basic_block(function, "dictcomp_continue");
+
+            if let Some(cond_expr) = condition {
+                let cond_val = self.eval_expr(cond_expr, ctx)?;
+                let cond_bool = self.to_bool_value(cond_val)?;
+                let append_bb = self.context.append_basic_block(function, "dictcomp_append");
+                let skip_bb = self.context.append_basic_block(function, "dictcomp_skip");
+                self.builder
+                    .build_conditional_branch(cond_bool, append_bb, skip_bb)?;
+
+                self.builder.position_at_end(append_bb);
+                self.emit_dict_comprehension_insert(map_handle, key, value, ctx)?;
+                self.builder.build_unconditional_branch(loop_continue_bb)?;
+
+                self.builder.position_at_end(skip_bb);
+                self.builder.build_unconditional_branch(loop_continue_bb)?;
+            } else {
+                self.emit_dict_comprehension_insert(map_handle, key, value, ctx)?;
+                self.builder.build_unconditional_branch(loop_continue_bb)?;
+            }
+
+            self.builder.position_at_end(loop_continue_bb);
+            self.builder.build_unconditional_branch(loop_cond_bb)?;
+
+            self.builder.position_at_end(loop_cleanup_bb);
+            self.builder
+                .build_call(iter_free_fn, &[iter_handle.into()], "dictcomp_free")?;
+            self.builder.build_unconditional_branch(loop_exit_bb)?;
+
+            self.builder.position_at_end(loop_exit_bb);
+
+            Ok(EvaluatedValue::with_value(
+                map_handle.into(),
+                OtterType::Map,
+            ))
+        })();
+
+        if inserted_new_binding {
+            ctx.remove(var);
+        }
+        if let Some(prev) = previous_binding {
+            ctx.insert(var.to_string(), prev);
+        }
+
+        result
+    }
+
+    fn emit_dict_comprehension_insert(
+        &mut self,
+        map_handle: IntValue<'ctx>,
+        key_expr: &Expr,
+        value_expr: &Expr,
+        ctx: &mut FunctionContext<'ctx>,
+    ) -> Result<()> {
+        let key_eval = self.eval_expr(key_expr, ctx)?;
+        let key_value = self.ensure_string_value(key_eval)?;
+
+        let value_eval = self.eval_expr(value_expr, ctx)?;
+        let raw_value = value_eval
+            .value
+            .ok_or_else(|| anyhow!("dict comprehension value produced no value"))?;
+
+        let (set_fn_name, expected_ty) = self.map_set_target(&value_eval.ty)?;
+        let set_fn = self.get_or_declare_ffi_function(set_fn_name)?;
+        let coerced_value = self.coerce_type(raw_value, value_eval.ty, expected_ty)?;
+
+        let handle_arg: BasicMetadataValueEnum = map_handle.into();
+        let key_arg: BasicMetadataValueEnum = key_value.into();
+        let value_arg: BasicMetadataValueEnum = coerced_value.into();
+
+        self.builder
+            .build_call(set_fn, &[handle_arg, key_arg, value_arg], "dictcomp_set")?;
+        Ok(())
+    }
+
+    fn map_set_target(&self, ty: &OtterType) -> Result<(&'static str, OtterType)> {
+        match ty {
+            OtterType::Str => Ok(("map.set", OtterType::Str)),
+            OtterType::I32 | OtterType::I64 => Ok(("set<map,int>", OtterType::I64)),
+            OtterType::F64 => Ok(("set<map,float>", OtterType::F64)),
+            OtterType::Bool => Ok(("set<map,bool>", OtterType::Bool)),
+            OtterType::List(_) => Ok(("set<map,list>", ty.clone())),
+            OtterType::Map => Ok(("set<map,map>", OtterType::Map)),
+            OtterType::Opaque => Ok(("set<map,list>", OtterType::opaque_list())),
+            _ => bail!("unsupported dict comprehension value type: {:?}", ty),
+        }
+    }
+
+    fn comprehension_element_type(&self, expr: &Expr) -> Option<OtterType> {
+        let id = expr as *const Expr as usize;
+        let span = self.expr_spans.get(&id)?;
+        if let Some(ty) = self.comprehension_var_types.get(span) {
+            self.typeinfo_to_otter_type(ty)
+        } else {
+            None
+        }
+    }
+
+    fn infer_comprehension_var_type(
+        &self,
+        var: &str,
+        element: &Expr,
+        condition: Option<&Expr>,
+    ) -> Option<OtterType> {
+        self.find_identifier_type_in_expr(element, var)
+            .or_else(|| condition.and_then(|cond| self.find_identifier_type_in_expr(cond, var)))
+    }
+
+    fn find_identifier_type_in_expr(&self, expr: &Expr, var: &str) -> Option<OtterType> {
+        match expr {
+            Expr::Identifier(name) if name == var => self
+                .expr_type(expr)
+                .and_then(|ty| self.typeinfo_to_otter_type(ty)),
+            Expr::Identifier(_) | Expr::Literal(_) => None,
+            Expr::Binary { left, right, .. } => self
+                .find_identifier_type_in_expr(left.as_ref().as_ref(), var)
+                .or_else(|| self.find_identifier_type_in_expr(right.as_ref().as_ref(), var)),
+            Expr::Unary { expr, .. } => {
+                self.find_identifier_type_in_expr(expr.as_ref().as_ref(), var)
+            }
+            Expr::Call { func, args } => self
+                .find_identifier_type_in_expr(func.as_ref().as_ref(), var)
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|arg| self.find_identifier_type_in_expr(arg.as_ref(), var))
+                }),
+            Expr::Member { object, .. } => {
+                self.find_identifier_type_in_expr(object.as_ref().as_ref(), var)
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => self
+                .find_identifier_type_in_expr(cond.as_ref().as_ref(), var)
+                .or_else(|| self.find_identifier_type_in_expr(then_branch.as_ref().as_ref(), var))
+                .or_else(|| {
+                    else_branch.as_ref().and_then(|expr| {
+                        self.find_identifier_type_in_expr(expr.as_ref().as_ref(), var)
+                    })
+                }),
+            Expr::Match { value, arms } => self
+                .find_identifier_type_in_expr(value.as_ref().as_ref(), var)
+                .or_else(|| {
+                    arms.iter().find_map(|arm| {
+                        let arm_ref = arm.as_ref();
+                        if let Some(guard) = &arm_ref.guard
+                            && let Some(found) =
+                                self.find_identifier_type_in_expr(guard.as_ref(), var)
+                        {
+                            return Some(found);
+                        }
+                        self.find_identifier_type_in_block(arm_ref.body.as_ref(), var)
+                    })
+                }),
+            Expr::Range { start, end } => self
+                .find_identifier_type_in_expr(start.as_ref().as_ref(), var)
+                .or_else(|| self.find_identifier_type_in_expr(end.as_ref().as_ref(), var)),
+            Expr::Array(elements) => elements
+                .iter()
+                .find_map(|elem| self.find_identifier_type_in_expr(elem.as_ref(), var)),
+            Expr::Dict(pairs) => pairs.iter().find_map(|(key, value)| {
+                self.find_identifier_type_in_expr(key.as_ref(), var)
+                    .or_else(|| self.find_identifier_type_in_expr(value.as_ref(), var))
+            }),
+            Expr::ListComprehension {
+                element,
+                var: inner_var,
+                iterable,
+                condition,
+            } => {
+                if inner_var == var {
+                    None
+                } else {
+                    self.find_identifier_type_in_expr(iterable.as_ref().as_ref(), var)
+                        .or_else(|| {
+                            self.find_identifier_type_in_expr(element.as_ref().as_ref(), var)
+                        })
+                        .or_else(|| {
+                            condition.as_ref().and_then(|cond| {
+                                self.find_identifier_type_in_expr(cond.as_ref().as_ref(), var)
+                            })
+                        })
+                }
+            }
+            Expr::DictComprehension {
+                key,
+                value,
+                var: inner_var,
+                iterable,
+                condition,
+            } => {
+                if inner_var == var {
+                    None
+                } else {
+                    self.find_identifier_type_in_expr(iterable.as_ref().as_ref(), var)
+                        .or_else(|| self.find_identifier_type_in_expr(key.as_ref().as_ref(), var))
+                        .or_else(|| self.find_identifier_type_in_expr(value.as_ref().as_ref(), var))
+                        .or_else(|| {
+                            condition.as_ref().and_then(|cond| {
+                                self.find_identifier_type_in_expr(cond.as_ref().as_ref(), var)
+                            })
+                        })
+                }
+            }
+            Expr::FString { parts } => parts.iter().find_map(|part| match part.as_ref() {
+                FStringPart::Expr(expr) => self.find_identifier_type_in_expr(expr.as_ref(), var),
+                _ => None,
+            }),
+            Expr::Await(expr) | Expr::Spawn(expr) => {
+                self.find_identifier_type_in_expr(expr.as_ref().as_ref(), var)
+            }
+            Expr::Struct { fields, .. } => fields
+                .iter()
+                .find_map(|(_, expr)| self.find_identifier_type_in_expr(expr.as_ref(), var)),
+        }
+    }
+
+    fn find_identifier_type_in_block(&self, block: &Block, var: &str) -> Option<OtterType> {
+        block
+            .statements
+            .iter()
+            .find_map(|stmt| self.find_identifier_type_in_statement(stmt.as_ref(), var))
+    }
+
+    fn find_identifier_type_in_statement(&self, stmt: &Statement, var: &str) -> Option<OtterType> {
+        match stmt {
+            Statement::Expr(expr) => self.find_identifier_type_in_expr(expr.as_ref(), var),
+            Statement::Let { expr, .. } | Statement::Assignment { expr, .. } => {
+                self.find_identifier_type_in_expr(expr.as_ref(), var)
+            }
+            Statement::Return(Some(expr)) => self.find_identifier_type_in_expr(expr.as_ref(), var),
+            Statement::Return(None)
+            | Statement::Break
+            | Statement::Continue
+            | Statement::Pass
+            | Statement::Struct { .. }
+            | Statement::Enum { .. }
+            | Statement::TypeAlias { .. }
+            | Statement::Use { .. }
+            | Statement::PubUse { .. }
+            | Statement::Function(_) => None,
+            Statement::If {
+                cond,
+                then_block,
+                elif_blocks,
+                else_block,
+            } => self
+                .find_identifier_type_in_expr(cond.as_ref(), var)
+                .or_else(|| self.find_identifier_type_in_block(then_block.as_ref(), var))
+                .or_else(|| {
+                    elif_blocks.iter().find_map(|(cond, block)| {
+                        self.find_identifier_type_in_expr(cond.as_ref(), var)
+                            .or_else(|| self.find_identifier_type_in_block(block.as_ref(), var))
+                    })
+                })
+                .or_else(|| {
+                    else_block
+                        .as_ref()
+                        .and_then(|block| self.find_identifier_type_in_block(block.as_ref(), var))
+                }),
+            Statement::While { cond, body } => self
+                .find_identifier_type_in_expr(cond.as_ref(), var)
+                .or_else(|| self.find_identifier_type_in_block(body.as_ref(), var)),
+            Statement::For { iterable, body, .. } => self
+                .find_identifier_type_in_expr(iterable.as_ref(), var)
+                .or_else(|| self.find_identifier_type_in_block(body.as_ref(), var)),
+            Statement::Block(block) => self.find_identifier_type_in_block(block.as_ref(), var),
+        }
     }
 
     fn ensure_string_value(&mut self, value: EvaluatedValue<'ctx>) -> Result<BasicValueEnum<'ctx>> {
@@ -1733,9 +2751,15 @@ impl<'ctx> Compiler<'ctx> {
                 vec![base_value],
                 "fmt_bool",
             ),
-            OtterType::List | OtterType::Opaque => {
+            OtterType::List(_) => {
                 // Try to convert list handle to string
                 // Opaque types might be list handles, so try stringify
+                self.call_ffi_returning_value("stringify<list>", vec![base_value], "stringify_list")
+            }
+            OtterType::Map => {
+                self.call_ffi_returning_value("stringify<map>", vec![base_value], "stringify_map")
+            }
+            OtterType::Opaque => {
                 self.call_ffi_returning_value("stringify<list>", vec![base_value], "stringify_list")
             }
             _ => bail!("cannot convert {:?} to string", ty),
@@ -1764,9 +2788,20 @@ impl<'ctx> Compiler<'ctx> {
         args: &[Node<Expr>],
         ctx: &mut FunctionContext<'ctx>,
     ) -> Result<Option<EvaluatedValue<'ctx>>> {
-        if let (Expr::Member { field, .. }, Some(enum_type @ TypeInfo::Enum { .. })) =
+        if let (Expr::Member { object, field }, Some(enum_type @ TypeInfo::Enum { .. })) =
             (func_expr, self.expr_type(call_expr).cloned())
         {
+            let enum_name = match &enum_type {
+                TypeInfo::Enum { name, .. } => name,
+                _ => unreachable!(),
+            };
+            if let Some(base) = self.member_base_name(object.as_ref().as_ref()) {
+                if base != enum_name {
+                    return Ok(None);
+                }
+            } else {
+                return Ok(None);
+            }
             let mut evaluated_args = Vec::with_capacity(args.len());
             for arg in args {
                 evaluated_args.push(self.eval_expr(arg.as_ref(), ctx)?);
@@ -1775,6 +2810,14 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(Some(value));
         }
         Ok(None)
+    }
+
+    fn member_base_name<'a>(&self, expr: &'a Expr) -> Option<&'a str> {
+        match expr {
+            Expr::Identifier(name) => Some(name.as_str()),
+            Expr::Member { field, .. } => Some(field.as_str()),
+            _ => None,
+        }
     }
 
     fn try_build_enum_from_member(
