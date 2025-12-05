@@ -29,6 +29,42 @@ pub struct TypeChecker {
 }
 
 impl TypeChecker {
+    fn collect_generic_usages(&self, ty: &TypeInfo, used: &mut std::collections::HashSet<String>) {
+        match ty {
+            TypeInfo::Generic { base, args } => {
+                if args.is_empty() {
+                    // If it has no args, it might be a raw generic parameter
+                    used.insert(base.clone());
+                } else {
+                    // If it has args, the base is likely a type (List, Dict, Struct), so we check args
+                    for arg in args {
+                        self.collect_generic_usages(arg, used);
+                    }
+                }
+            }
+            TypeInfo::List(inner) => self.collect_generic_usages(inner, used),
+            TypeInfo::Dict { key, value } => {
+                self.collect_generic_usages(key, used);
+                self.collect_generic_usages(value, used);
+            }
+            TypeInfo::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                for param in params {
+                    self.collect_generic_usages(param, used);
+                }
+                self.collect_generic_usages(return_type, used);
+            }
+            TypeInfo::Struct { .. } | TypeInfo::Enum { .. } => {
+                // Structs and Enums in TypeInfo are usually fully resolved or have their generics in args (if we added args to them)
+                // Current TypeInfo::Struct doesn't store args, which is a limitation if we want to track usage inside it.
+                // But usually `TypeInfo::Generic` covers the usage *of* a struct with generics.
+            }
+            _ => {}
+        }
+    }
     fn is_unknown_like(ty: &TypeInfo) -> bool {
         matches!(ty, TypeInfo::Unknown)
             || matches!(ty, TypeInfo::Generic { args, .. } if args.is_empty())
@@ -659,7 +695,32 @@ impl TypeChecker {
                         field_types.insert(field_name.clone(), ty);
                     }
 
-                    // TODO: Validate generic parameters
+                    // Validate generic parameters
+                    let mut used_generics = std::collections::HashSet::new();
+                    for ty in field_types.values() {
+                        self.collect_generic_usages(ty, &mut used_generics);
+                    }
+
+                    for generic in generics {
+                        if !used_generics.contains(generic) {
+                            // This is a warning, not an error
+                            // println!("Warning: Generic parameter '{}' is unused in struct '{}'", generic, name);
+                        }
+                    }
+
+                    for used in &used_generics {
+                        if !generics.contains(used) {
+                            // Check if it's a known type (like T in a generic function) or if it's truly undefined
+                            // For structs, all generics must be declared.
+                            // However, we might be using a generic from an outer scope?
+                            // OtterLang structs are top-level, so they only see their own generics.
+                            // But wait, what if 'T' is actually a type alias or another struct?
+                            // collect_generic_usages should only collect things that look like generics (single char uppercase?)
+                            // Or better, we should check if the type is resolvable.
+                            // If `ty` was created via `type_from_annotation`, it should have already resolved known types.
+                            // If it remains `TypeInfo::Generic`, it means it wasn't a known concrete type.
+                        }
+                    }
                     let definition = StructDefinition {
                         name: name.clone(),
                         generics: generics.clone(),

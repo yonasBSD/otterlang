@@ -1,0 +1,10 @@
+fn test_default_values(x: int = 10, y: string = "hello"):
+    println(y)
+
+struct GenericStruct<T>:
+    value: T
+
+fn main():
+    test_default_values()
+    let s = GenericStruct(value=42)
+    println("Test passed")

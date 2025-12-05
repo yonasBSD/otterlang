@@ -722,7 +722,11 @@ impl<'ctx> Compiler<'ctx> {
                     BasicTypeEnum::StructType(t) => t.const_zero().into(), // For unit/void which might be mapped to struct or i8
                     BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
                     BasicTypeEnum::VectorType(t) => t.const_zero().into(),
-                    _ => unimplemented!("Unsupported return type for default value generation"),
+                    _ => {
+                        // For other types (like pointers to structs/arrays), return null/zero
+                        // This is safer than crashing, though ideally we'd have specific default values
+                        llvm_ty.const_zero()
+                    }
                 };
 
                 self.builder.build_return(Some(&default_val))?;

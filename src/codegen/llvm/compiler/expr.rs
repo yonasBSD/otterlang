@@ -1969,6 +1969,35 @@ impl<'ctx> Compiler<'ctx> {
                 }
             }
 
+            // Fill in default values for missing arguments
+            if arg_values.len() < param_types.len() {
+                let defaults_to_eval =
+                    if let Some(defaults) = self.function_defaults.get(&resolved_func_name) {
+                        let mut to_eval = Vec::new();
+                        for i in arg_values.len()..param_types.len() {
+                            if let Some(default_expr) = defaults.get(i).and_then(|d| d.as_ref()) {
+                                to_eval.push((i, default_expr.clone()));
+                            } else {
+                                bail!("Missing argument {} for function {}", i, resolved_func_name);
+                            }
+                        }
+                        to_eval
+                    } else {
+                        bail!("Missing arguments for function {}", resolved_func_name);
+                    };
+
+                for (i, default_expr) in defaults_to_eval {
+                    let val = self.eval_expr(&default_expr, ctx)?;
+                    if let Some(v) = val.value {
+                        let param_type = param_types[i];
+                        let converted = self.cast_argument_for_call(v, val.ty, &param_type)?;
+                        arg_values.push(converted.into());
+                    } else {
+                        bail!("Default value for argument {} evaluated to void", i);
+                    }
+                }
+            }
+
             // Call the function
             let call_site = self.builder.build_call(function, &arg_values, &func_name)?;
 
