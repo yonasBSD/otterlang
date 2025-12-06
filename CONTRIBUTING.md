@@ -1,76 +1,97 @@
 # Contributing to OtterLang
 
-Thanks for helping shape OtterLang! This guide covers setup, workflow expectations, and contribution tips.
+Thank you for your interest in contributing to OtterLang! This guide will help you get started with development setup, workflow expectations, and contribution guidelines.
 
 ## Development Setup
 
-### Option 1: `nix develop` (recommended)
+### Option 1: Nix Development Environment (Recommended)
+
+The easiest way to get started is using the Nix development environment:
 
 ```bash
 nix develop
 cargo +nightly build --release
 ```
 
-### Option 2: manual toolchain
+### Option 2: Manual Toolchain Setup
 
-1. Install prerequisites
-   - Rust nightly (`rustup toolchain install nightly`)
-   - LLVM 18 (set `LLVM_SYS_181_PREFIX`)
+If you prefer to set up the toolchain manually, follow these steps:
 
-2. Platform-specific steps
+#### Prerequisites
 
-   **macOS**
+1. Install Rust nightly:
    ```bash
-   brew install llvm@18
-   export LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)
-   export LLVM_SYS_180_PREFIX=$LLVM_SYS_181_PREFIX
-   export PATH="$LLVM_SYS_181_PREFIX/bin:$PATH"
-   cargo +nightly build --release
-   ```
-
-   **Ubuntu / Debian**
-   ```bash
-   sudo apt-get install -y llvm-18 llvm-18-dev clang-18
-   export LLVM_SYS_181_PREFIX=/usr/lib/llvm-18
-   export LLVM_SYS_180_PREFIX=$LLVM_SYS_181_PREFIX
-   cargo +nightly build --release
-   ```
-
-   **Windows**
-   ```powershell
-   cargo install llvmenv --locked
-   llvmenv install 18.1
-   llvmenv global 18.1
-
-   $llvmPath = llvmenv prefix
-   $env:LLVM_SYS_181_PREFIX = $llvmPath
-   $env:LLVM_SYS_180_PREFIX = $llvmPath
-   $env:Path = "$llvmPath\bin;$env:Path"
-
    rustup toolchain install nightly
-   rustup default nightly
-
-   cargo +nightly build --release
    ```
 
-> **Windows tip:** use the *x64 Native Tools Command Prompt for VS 2022*. It preloads the MSVC linker environment that plain PowerShell/CMD sessions lack.
+2. Install LLVM 18 and set the `LLVM_SYS_181_PREFIX` environment variable
+
+#### Platform-Specific Instructions
+
+**macOS**
+
+```bash
+brew install llvm@18
+export LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)
+export LLVM_SYS_180_PREFIX=$LLVM_SYS_181_PREFIX
+export PATH="$LLVM_SYS_181_PREFIX/bin:$PATH"
+cargo +nightly build --release
+```
+
+**Ubuntu / Debian**
+
+```bash
+sudo apt-get install -y llvm-18 llvm-18-dev clang-18
+export LLVM_SYS_181_PREFIX=/usr/lib/llvm-18
+export LLVM_SYS_180_PREFIX=$LLVM_SYS_181_PREFIX
+cargo +nightly build --release
+```
+
+**Windows**
+
+```powershell
+cargo install llvmenv --locked
+llvmenv install 18.1
+llvmenv global 18.1
+
+$llvmPath = llvmenv prefix
+$env:LLVM_SYS_181_PREFIX = $llvmPath
+$env:LLVM_SYS_180_PREFIX = $llvmPath
+$env:Path = "$llvmPath\bin;$env:Path"
+
+rustup toolchain install nightly
+rustup default nightly
+
+cargo +nightly build --release
+```
+
+> **Note for Windows users:** Use the *x64 Native Tools Command Prompt for VS 2022*. It preloads the MSVC linker environment that plain PowerShell/CMD sessions lack.
 
 ## Building & Testing
 
+Build the project:
+
 ```bash
 cargo +nightly build --release
+```
+
+Run the test suite:
+
+```bash
 cargo test
 ```
 
 ## Workflow Expectations
 
-### Code style
+### Code Style
+
 - Run `cargo fmt` before committing
 - Run `cargo clippy` (nightly) and resolve warnings
 - Favor expressive names and small helpers over heavy commenting
 
-### Commit messages
-Use concise prefixes:
+### Commit Messages
+
+Use concise prefixes following conventional commit format:
 
 ```
 feat: add array indexing support
@@ -79,34 +100,42 @@ docs: update FFI documentation
 refactor: simplify lexer tokenization
 ```
 
-### Pull requests
+### Pull Requests
+
+When submitting a pull request:
+
 1. Keep PRs scoped to a single change
 2. Add tests/docs alongside behavioral changes
 3. Ensure CI is green before requesting review
-4. Reference related issues when possible (`Fixes #123`)
+4. Reference related issues when possible (e.g., `Fixes #123`)
 
 ## Areas for Contribution
 
-- Language front-end (parser, type checker, diagnostics)
-- Standard library modules and runtime utilities
-- Transparent FFI bridge (type mapping, cache tooling, `bridge.yaml` configs)
-- Tooling (VS Code extension, LSP, formatter, REPL/TUI)
-- Documentation + runnable examples (`examples/basic`, `examples/ffi`, `examples/benchmarks`)
-- Performance profiling and error-message polish
+We welcome contributions in the following areas:
 
-### Custom FFI bridges
+- **Language Front-End**: Parser, type checker, diagnostics
+- **Standard Library**: Modules and runtime utilities
+- **FFI Bridge**: Type mapping, cache tooling, `bridge.yaml` configs
+- **Tooling**: VS Code extension, LSP, formatter, REPL/TUI
+- **Documentation**: Runnable examples (`examples/basic`, `examples/ffi`, `examples/benchmarks`)
+- **Performance**: Profiling and error-message polish
+
+### Custom FFI Bridges
+
 Most crates work via automatic rustdoc extraction. For bespoke setups:
+
 1. Create `ffi/<crate>/bridge.yaml`
-2. Describe the dependency metadata + any overrides
+2. Describe the dependency metadata and any overrides
 3. Use `ffi/rand/bridge.yaml` as a reference
 
 ## Reporting Issues
 
-Please include:
+When reporting issues, please include:
+
 - Clear reproduction steps or a minimal failing example
 - Expected vs actual behavior
 - Environment details (OS, LLVM/clang version, Rust toolchain, `nix develop` vs manual)
 
 ## License
 
-By contributing you agree your work will be released under the MIT License.
+By contributing, you agree that your work will be released under the MIT License.

@@ -4,21 +4,25 @@
 
 Currently, OtterLang is in **Early Access (v0.1.0)**. Security updates are provided for the latest version.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| Version | Supported |
+|---------|-----------|
+| 0.1.x   | Yes       |
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in OtterLang, please report it responsibly:
+If you discover a security vulnerability in OtterLang, please report it responsibly by following the steps below.
+
+### Reporting Process
 
 1. **Do NOT** open a public GitHub issue
-2. Message security details to our discord: https://discord.gg/y3b4QuvyFk
-3. Include:
+2. Message security details to our [Discord](https://discord.gg/y3b4QuvyFk)
+3. Include the following information:
    - Description of the vulnerability
    - Steps to reproduce
    - Potential impact
    - Suggested fix (if any)
+
+### Response Timeline
 
 We will:
 - Acknowledge receipt within 48 hours
@@ -39,6 +43,8 @@ As an experimental language, OtterLang has some security considerations:
 
 ### Best Practices
 
+To help maintain security when using OtterLang:
+
 - **Validate Input**: Always validate user input and external data
 - **Use Trusted FFI**: Only import Rust crates from trusted sources
 - **Error Handling**: Use proper error handling (nil checks, etc.)
@@ -47,6 +53,7 @@ As an experimental language, OtterLang has some security considerations:
 ## Security Updates
 
 Security updates will be released as patch versions (0.1.x) and announced in:
+
 - GitHub Releases
 - Security Advisories
 - CHANGELOG.md
