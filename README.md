@@ -13,10 +13,28 @@
   
   [![Build Status](https://github.com/jonathanmagambo/otterlang/workflows/CI/badge.svg)](https://github.com/jonathanmagambo/otterlang/actions)
   [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/y3b4QuvyFk)
-  
-  <br><br>
-  An indentation-sensitive programming language with an LLVM backend. OtterLang compiles to native binaries with a focus on simplicity and performance.
 </div>
+
+<h1 align="center">What is OtterLang?</h1>
+
+OtterLang is an indentation-sensitive programming language with an LLVM backend that compiles to native machine code. It combines Python-like simplicity with Rust-like performance and seamless interoperability with the Rust ecosystem.
+
+**Think of OtterLang as a modern language that bridges the gap between high-level expressiveness and low-level performance, with transparent access to the entire Rust ecosystem.**
+
+<h1 align="center">Goals</h1>
+
+- 🎯 **Simple syntax** – Indentation-driven, no braces or semicolons
+- ⚡ **Native performance** – Compiles to native binaries with LLVM
+- 🔗 **Transparent Rust FFI** – Import any Rust crate with `use rust:crate_name`
+- 🛡️ **Memory safety** – Generational garbage collection with explicit root APIs
+- 🧵 **Concurrency** – Built-in async task runtime
+- 📦 **Rich standard library** – Comprehensive stdlib covering IO, networking, JSON, and more
+
+<h1 align="center">Non-goals</h1>
+
+- *Drop-in Python replacement* – OtterLang has its own syntax and semantics
+- *New syntax proliferation* – We keep the language minimal and familiar
+- *Runtime interpreter* – OtterLang is a compiled language
 
 <h3 align="center">
   <a href="docs/ROADMAP.md"><b>Roadmap</b></a>
@@ -28,86 +46,15 @@
 
 <h1 align="center">Quick Start</h1>
 
-Get started with OtterLang in just a few commands:
-
 ```bash
 git clone https://github.com/jonathanmagambo/otterlang.git
 cd otterlang
-
-# Environment setup (Nix provides Rust nightly + LLVM 18)
-nix develop            # recommended shell with all dependencies
+nix develop
 cargo build --release
-
-# Create and run your first program
-cat > hello.ot << 'EOF'
-fn main():
-    println("Hello from OtterLang!")
-EOF
-
 ./target/release/otter run hello.ot
 ```
 
-See the [Getting Started Guide](docs/GETTING_STARTED.md) for detailed installation and usage instructions.
-
-<h1 align="center">Getting Started</h1>
-
-1. **Using Nix (recommended)**: Run `nix develop` to enter the development environment, then `cargo build --release`.
-2. **Manual installation**: Install Rust nightly (`rustup toolchain install nightly`) and LLVM 18, then build with `cargo +nightly build --release`.
-3. Run code with `otter run file.ot` or emit binaries with `otter build file.ot -o my_app`.
-
-The [Getting Started Guide](docs/GETTING_STARTED.md) expands on editor setup, cache usage, the REPL, and snapshot testing.
-
-<h1 align="center">Language Features</h1>
-
-OtterLang pairs indentation-aware syntax with modern language constructs:
-
-1. **Whitespace-driven grammar** – no braces or semicolons, just `fn`, blocks, and meaningful indentation.
-2. **Static typing with inference** – optional annotations, tuples, enums, and generics.
-3. **Structured error handling** – `Result<T, E>` enum with pattern matching plus `panic`/`recover` utilities.
-4. **Async task runtime** – `spawn` and `await` built on the Otter task scheduler.
-5. **Generational GC** – explicit root APIs (`gc.alloc`, `gc.add_root`, `gc.remove_root`) keep FFI safe.
-6. **Transparent Rust FFI** – import any crate with `use rust:crate_name` and call it directly.
-
-### Transparent Rust FFI
-
-The compiler shells out to `cargo`/rustdoc, normalizes the crate’s public API, and generates a native bridge automatically. Import crates directly from OtterLang (`use rust:serde::{json}`) without touching build scripts. See the [FFI Guide](docs/FFI_GUIDE.md) for configuration, caching, and troubleshooting tips.
-
-### Standard Library
-
-Built-in modules cover IO, math, JSON, tasks, runtime helpers, strings, networking, testing, and more. The [API Reference](docs/API_REFERENCE.md) documents every exported function.
-
-Only the true language primitives (enums, `Option`/`Result`, `panic`, `print`, `len`, strings, lists, maps, and arithmetic) live in the implicit prelude. All other stdlib functionality now follows a Python-style import model—`use http`, `use yaml`, `use task`, etc.—and nothing outside the prelude is visible until you import the module you need.
-
-
-<h1 align="center">Command Line Interface</h1>
-
-The `otter` binary drives every workflow:
-
-```bash
-otter run program.ot            # Compile + execute
-otter build program.ot -o app   # Emit native binary
-otter fmt                       # Format .ot files
-otter repl                      # Interactive REPL
-otter test path/to/tests        # Run snapshot-style tests
-```
-
-Cross-compilation targets (including WebAssembly) are described in the [Getting Started Guide](docs/GETTING_STARTED.md#building-executables).
-
-For runnable code examples that demonstrate the parser, runtime, and FFI bridge, check out [docs/EXAMPLES.md](docs/EXAMPLES.md) and browse the `examples/` directory in the repository.
-
-<h1 align="center">VSCode Extension</h1>
-
-Enhance your OtterLang development experience with our official VS Code extension, providing a complete development environment:
-
-- **Syntax Highlighting** – Full support for OtterLang syntax with color-coded keywords, functions, and types
-- **Language Server Protocol (LSP)** – Real-time diagnostics, error reporting, and code intelligence
-- **Code Snippets** – Quick code templates for common patterns and boilerplate
-- **Integrated Diagnostics** – Instant feedback on syntax errors, type mismatches, and other issues
-- **Editor Integration** – Seamless integration with VS Code's built-in features
-
-Installation instructions, feature updates, and release notes are available in the [vscode-extension README](vscode-extension/README.md).
-
-> **Note:** A Zed extension is coming soon! Stay tuned for updates.
+See the [Getting Started Guide](docs/GETTING_STARTED.md) for detailed instructions.
 
 <h1 align="center">Documentation</h1>
 
@@ -123,33 +70,23 @@ Installation instructions, feature updates, and release notes are available in t
 
 **[API Reference](docs/API_REFERENCE.md)** – stdlib module documentation.
 
-
 </div>
+
+<h1 align="center">Editor Support</h1>
+
+- **VS Code Extension** – Syntax highlighting, LSP, diagnostics. See [vscode-extension README](vscode-extension/README.md).
+- **Zed Extension** – Coming soon!
 
 <h1 align="center">Project Status</h1>
 
 **Early Access (v0.1.0)** – experimental tooling, expect sharp edges.
 
-### Known Limitations
-
-- `match` arms do not support guard clauses (`case value if ...`) yet; only direct patterns are accepted.
-- Transparent Rust FFI exposes functions and methods, but macros/proc-macros are ignored and structs/enums cross the boundary as opaque handles (see [FFI Guide](docs/FFI_GUIDE.md#limitations)).
-- WebAssembly builds run without filesystem access or full FFI support, so many stdlib modules (`io`, `net`, `task`) are unavailable in that target. See the [Getting Started Guide](docs/GETTING_STARTED.md#building-executables) for details.
-- Building the toolchain currently requires LLVM 18 and Rust nightly because the bridge generator depends on nightly-only rustdoc features.
-
 <h1 align="center">Contributing and License</h1>
 
 > [!IMPORTANT]
-> OtterLang is currently in **Early Access (v0.1.0)** and is being actively developed. The project is experimental, and you may encounter sharp edges. **If you plan to contribute to the project, now is the time to provide a helping hand for the hardworking team**. Your contributions during this early stage will help shape the future of OtterLang.
+> OtterLang is currently in **Early Access (v0.1.0)** and is being actively developed. **If you plan to contribute, now is the time to provide a helping hand for the hardworking team**.
 
-OtterLang is free and open source, released under the **BSD-3-Clause License**. The license allows you to:
-
-- View the source code and learn from it
-- Use it for any purpose, including commercial use
-- Modify and distribute the code
-- Use it in proprietary software
-
-Contributions are welcome with open arms as we look to foster a community. Please proceed to take a look at [CONTRIBUTING.md](./CONTRIBUTING.md) for more information on how to get started, as well as the codebase to learn from it. We sincerely and deeply are grateful and thankful for your efforts.
+OtterLang is free and open source, released under the **BSD-3-Clause License**. Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for more information.
 
 <h1 align="center">Contributors</h1>
 
