@@ -38,12 +38,6 @@ OtterLang is an indentation-sensitive programming language with an LLVM backend 
 - 🧵 **Concurrency** – Built-in async task runtime
 - 📦 **Rich standard library** – Comprehensive stdlib covering IO, networking, JSON, and more
 
-<h1 align="center">Non-goals</h1>
-
-- *Drop-in Python replacement* – OtterLang has its own syntax and semantics
-- *New syntax proliferation* – We keep the language minimal and familiar
-- *Runtime interpreter* – OtterLang is a compiled language
-
 <h1 align="center">Quick Start</h1>
 
 ```bash
@@ -71,15 +65,6 @@ See the [Getting Started Guide](docs/GETTING_STARTED.md) for detailed instructio
 **[API Reference](docs/API_REFERENCE.md)** – stdlib module documentation.
 
 </div>
-
-<h1 align="center">Editor Support</h1>
-
-- **VS Code Extension** – Syntax highlighting, LSP, diagnostics. See [vscode-extension README](vscode-extension/README.md).
-- **Zed Extension** – Coming soon!
-
-<h1 align="center">Project Status</h1>
-
-**Early Access (v0.1.0)** – experimental tooling, expect sharp edges.
 
 <h1 align="center">Contributing and License</h1>
 
