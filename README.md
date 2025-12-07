@@ -140,3 +140,17 @@ OtterLang is free and open source, released under the **BSD-3-Clause License**. 
 - Use it in proprietary software
 
 Contributions are welcome with open arms as we look to foster a community. Please proceed to take a look at [CONTRIBUTING.md](./CONTRIBUTING.md) for more information on how to get started, as well as the codebase to learn from it. We sincerely and deeply are grateful and thankful for your efforts.
+
+<h1 align="center">Contributors</h1>
+
+<div align="center">
+
+<a href="https://github.com/jonathanmagambo/otterlang/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=jonathanmagambo/otterlang" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
+
+![Alt](https://repobeats.axiom.co/api/embed/311d7c69bcf9daf0ef09f03cb6e369994f71b519.svg "Repobeats analytics image")
+
+</div>
