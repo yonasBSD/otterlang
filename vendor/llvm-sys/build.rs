@@ -242,7 +242,7 @@ fn is_compatible_llvm(llvm_version: &Version) -> bool {
     let strict =
         env::var_os(&*ENV_STRICT_VERSIONING).is_some() || cfg!(feature = "strict-versioning");
     // Only warn if versions don't match or if strict mode is enabled
-    if strict || llvm_version != *CRATE_VERSION {
+    if strict || *llvm_version != *CRATE_VERSION {
         println!(
             "cargo:warning=Comparing requested LLVM {:?} vs crate {:?} (strict={})",
             llvm_version, *CRATE_VERSION, strict
