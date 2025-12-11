@@ -9,7 +9,7 @@ This roadmap captures the work required before the first public release, grouped
 | Language front-end | `crates/otterc_*`, `docs/LANGUAGE_SPEC.md` | Ready | Parser/type checker implemented; needs async & pattern-guard decisions before freeze |
 | Runtime + stdlib | `src/runtime/**/*`, `stdlib/otter/*` | Ready | Core features present; channels/tasks/gc need polish & docs |
 | JIT & codegen | `src/codegen/llvm`, `src/runtime/jit/*` | Partial | Functional but hot-path optimizations stubbed; adaptive managers exist but rarely invoked |
-| Tooling | `src/cli.rs`, `src/repl`, `crates/otterc_fmt`, `src/lsp`, `vscode-extension/` | Partial | Works end-to-end; REPL UX, CLI flags, formatter parity pending |
+| Tooling | `src/cli.rs`, `crates/otterc_fmt`, `src/lsp`, `vscode-extension/` | Partial | Works end-to-end; CLI flags, formatter parity pending |
 | Docs & release | `docs/*.md`, `.github/workflows` | Partial | Comprehensive docs exist; need install guide, GC/task write-ups, release automation |
 
 ## 1. Language & Type System
@@ -47,7 +47,6 @@ This roadmap captures the work required before the first public release, grouped
 |-----|---------|----------------|----------|
 | ~~GC configuration hidden~~ | CLI now exposes `--gc-*` switches that feed directly into `OTTER_GC_*`, and the getting-started guide documents the available strategies/threshold knobs. | CLI, runtime config, docs | Done |
 | ~~Arena/root APIs undocumented~~ | `docs/GC_GUIDE.md` now walks through GC tuning, root registration, and arena allocation with FFI examples so developers can safely manage memory. | Docs | Done |
-| REPL recompiles everything | `ReplEngine` reparses and rebuilds LLVM modules on every input (`src/repl/engine.rs:73-150`), creating temp libraries and GC allocations repeatedly. Implement incremental compilation or trimming so long sessions do not leak memory. | REPL, JIT | Medium |
 | GC strategy implementation gaps | `src/runtime/memory/gc.rs` defines reference counting, mark-sweep, and generational collectors, but only mark-sweep sees regular exercise. Reference-counting lacks cycle detection, generational GC never promotes objects, and `GcStrategy::None` is untested. We need test coverage for each strategy, runtime metrics to surface collector stats, and a way to hot-swap strategies based on `GcConfig`. | Runtime memory subsystem | High |
 | Arena allocator integration | The arena API (`src/runtime/memory/arena.rs`, `src/runtime/stdlib/gc.rs`) is disconnected from the rest of the allocator story—Otter programs cannot tie arenas to lifetimes or automatically reset them. Add high-level Otter APIs (`stdlib/otter/gc.ot`), ensure arenas respect GC roots, and document how arenas interact with FFI allocations. | Runtime memory + stdlib | Medium |
 | Memory profiler visibility | `src/runtime/memory/profiler.rs` can record allocations, but no user-facing tool surfaces the data. Integrate it with `otter profile` and expose hooks in the CLI/LSP so developers can inspect object counts, GC pauses, and arena usage. | Memory profiler, CLI, tooling | Medium |
@@ -56,7 +55,6 @@ This roadmap captures the work required before the first public release, grouped
 
 | Gap | Details | Relevant Files | Priority |
 |-----|---------|----------------|----------|
-| REPL UX | No multiline editing/history, results are not printed, and every snippet wraps a fake `__repl_expr` function (`src/repl/engine.rs:73-150`). Implement a persistent evaluator that reuses compiled code, prints expression results, and exposes commands (import, reset, inspect). | REPL | High |
 | CLI flag validation | Flags such as `--tasks`, `--tasks_debug`, and GC env vars have no validation or help text beyond clap defaults (`src/cli.rs:16-120`). Add cohesive `--gc-*`/`--task-*` behavior and update `INSTALL.md`/`README.md`. | CLI, docs | Medium |
 | LSP capability gaps | The LSP hardcodes completions/snippets (`src/lsp/mod.rs:15-90`), rebuilds a fresh `TypeChecker` per request, and only sees the active document. Add a module-aware index, workspace symbol table, semantic tokens, and go-to-definition/reference support across files so the VS Code extension reflects real project structure. | LSP, type checker | Medium |
 | Formatter/LSP parity | `crates/otterc_fmt` and VS Code grammar need to stay in sync with the current spec (spawn/await spacing, comprehension layout). Audit formatter output and update `vscode-extension/syntaxes/otterlang.tmLanguage.json`. | Formatter, VS Code extension | Medium |
@@ -79,8 +77,8 @@ This roadmap captures the work required before the first public release, grouped
 |------|--------|--------------|
 | Language/spec | Language WG | Remove/implement `async`, expand iterator support, finalize spec + regression tests |
 | Runtime/JIT | Runtime WG | Task handle semantics, spawn context cleanup, enable hot-function recompilation |
-| Memory/GC | Runtime WG | CLI/ENV integration, GC/arena documentation, REPL memory plan |
-| Tooling/DX | DX WG | REPL redesign, formatter/LSP audit, CLI flag UX |
+| Memory/GC | Runtime WG | CLI/ENV integration, GC/arena documentation, runtime profiling |
+| Tooling/DX | DX WG | Formatter/LSP audit, CLI flag UX |
 | Docs/Release | DevRel + Release | Tutorials/examples, install guide, release automation, roadmap visibility |
 
 Update this document whenever a gap is closed or a new blocker emerges so the path to v0.1 stays aligned with the codebase.

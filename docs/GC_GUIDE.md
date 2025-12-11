@@ -102,4 +102,4 @@ Never read/write through an arena pointer after calling `reset` or `destroy`.
 4. **Reset arenas frequently** to keep their footprint bounded and to avoid aliasing freed memory.
 5. **Monitor runtime metrics.** `runtime.stats()` and `runtime.memory()` help you confirm your collector settings.
 
-These conventions prevent dangling pointers when interfacing with native code and keep long-lived REPL or server sessions from leaking memory.
+These conventions prevent dangling pointers when interfacing with native code and keep long-lived services from leaking memory.

@@ -19,9 +19,6 @@ otter bench list examples
 
 # Format code
 otter fmt
-
-# Start REPL
-otter repl
 ```
 
 ## Installation Location
@@ -64,4 +61,3 @@ To update the installed binary:
 ```bash
 cargo install --path . --bin otter --force
 ```
-

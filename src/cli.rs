@@ -127,8 +127,6 @@ pub enum Command {
     /// Checks the source file for errors without generating code.
     #[command(alias = "c")]
     Check { path: PathBuf },
-    /// Start an interactive REPL (Read-Eval-Print Loop).
-    Repl,
     /// Format OtterLang source code.
     Fmt {
         /// Files to format (defaults to all .ot files in current directory)
@@ -169,7 +167,6 @@ pub fn run() -> Result<()> {
         Command::Run { path } => handle_run(&cli, path),
         Command::Build { path, output } => handle_build(&cli, path, output.clone()),
         Command::Check { path } => handle_check(&cli, path),
-        Command::Repl => handle_repl(&cli),
         Command::Fmt { paths } => handle_fmt(paths),
         Command::Profile { subcommand } => {
             crate::tools::profiler::run_profiler_subcommand(subcommand)
@@ -650,14 +647,6 @@ impl GcCliOptions {
         }
     }
 
-    fn apply_to_process_env(&self) {
-        for (key, value) in self.env_pairs() {
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-    }
-
     fn env_pairs(&self) -> Vec<(&'static str, String)> {
         let mut pairs = Vec::new();
         if let Some(strategy) = self.strategy {
@@ -990,32 +979,6 @@ fn handle_fmt(paths: &[PathBuf]) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn handle_repl(cli: &OtterCli) -> Result<()> {
-    use crate::repl::{ReplEngine, Tui};
-
-    let gc = CompilationSettings::from_cli(cli)?.gc;
-    gc.apply_to_process_env();
-
-    let engine = ReplEngine::new();
-    match Tui::new(engine) {
-        Ok(mut tui) => {
-            if let Err(e) = tui.run() {
-                eprintln!("TUI error: {}", e);
-                eprintln!("Error chain: {:?}", e);
-                return Err(e).with_context(|| "TUI runtime error");
-            }
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Failed to initialize TUI: {}", e);
-            eprintln!("Error chain: {:?}", e);
-            Err(e).with_context(
-                || "Failed to initialize TUI. Make sure you're running in a terminal.",
-            )
-        }
-    }
 }
 
 fn print_profile(metadata: &CacheMetadata) {

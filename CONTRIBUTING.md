@@ -218,7 +218,7 @@ We welcome contributions in the following areas:
 - **Language Front-End**: Parser, type checker, diagnostics
 - **Standard Library**: Modules and runtime utilities
 - **FFI Bridge**: Type mapping, cache tooling, `bridge.yaml` configs
-- **Tooling**: VS Code extension, LSP, formatter, REPL/TUI
+- **Tooling**: VS Code extension, LSP, formatter
 - **Documentation**: Runnable examples (`examples/basic`, `examples/ffi`, `examples/benchmarks`)
 - **Performance**: Profiling and error-message polish
 

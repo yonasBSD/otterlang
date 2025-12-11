@@ -596,4 +596,4 @@ whitespace      := [ \t\n\r]+
 - **Memory Management** – The runtime ships multiple GC strategies (reference counting for short-lived objects, mark-and-sweep, and arena allocators) that can be selected via `runtime/memory` configuration. Modules such as `gc` and `runtime` expose helpers for GC control from Otter code.
 - **Code Generation** – The `otter` binary currently targets LLVM for JIT/native code generation.
 - **Task Runtime** – `spawn`, `await`, `task.*` helpers, and `sync` primitives are thin wrappers around the scheduler implemented in `src/runtime/task`, so task handles, typed channels, and wait groups interoperate consistently.
-- **Tooling** – The repository ships a formatter, language server, REPL, and VS Code extension that all understand the syntax described in this document.
+- **Tooling** – The repository ships a formatter, language server, and VS Code extension that all understand the syntax described in this document.

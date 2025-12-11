@@ -346,14 +346,6 @@ otter fmt source.ot
 otter fmt --check *.ot
 ```
 
-#### `repl` - Interactive REPL
-
-Start an interactive Read-Eval-Print Loop for experimenting with OtterLang code.
-
-```bash
-otter repl [options]
-```
-
 ### Advanced Commands
 
 #### `test` - Run Tests
