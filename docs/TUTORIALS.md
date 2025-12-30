@@ -64,7 +64,8 @@ Hello, World!
 - `println(...)` - This function prints text to the console and adds a newline.
 - Indentation - Notice the 4 spaces before `println`. OtterLang uses indentation (like Python) to define code blocks.
 
-> **Tip:** Use `print()` instead of `println()` if you don't want a newline after your output.
+> [!TIP]
+> Use `print()` instead of `println()` if you don't want a newline after your output.
 
 **Try it yourself:** Modify the program to print your name instead of "Hello, World!".
 
@@ -166,7 +167,8 @@ fn main():
     name = "Bob"
 ```
 
-> **Note:** OtterLang doesn't have a `mut` keyword. All variables are mutable by default.
+> [!NOTE]
+> OtterLang doesn't have a `mut` keyword. All variables are mutable by default.
 
 ### Type System Summary
 
@@ -226,7 +228,8 @@ fn main():
     msg2 = greet("Bob", "Hi")  # "Hi, Bob!"
 ```
 
-> **Important:** Once a parameter has a default value, all subsequent parameters must also have defaults.
+> [!IMPORTANT]
+> Once a parameter has a default value, all subsequent parameters must also have defaults.
 
 ### F-Strings (String Interpolation)
 
@@ -348,7 +351,8 @@ fn main():
         println(char)
 ```
 
-> **Note:** The `start..end` syntax creates a range that's exclusive of `end` (like `[start, end)`).
+> [!NOTE]
+> The `start..end` syntax creates a range that's exclusive of `end` (like `[start, end)`).
 
 ### Loop Control
 
@@ -436,7 +440,8 @@ fn main():
     # {1: 1, 2: 4, 3: 9, 4: 16, 5: 25}
 ```
 
-> **Tip:** Use dictionaries when you need to look up values by a key, and lists when order matters.
+> [!TIP]
+> Use dictionaries when you need to look up values by a key, and lists when order matters.
 
 ---
 
@@ -469,7 +474,8 @@ fn main():
     println(f"Hello, {person.name}!")
 ```
 
-> **Important:** Struct instantiation uses parentheses and equals signs: `Point(x=0.0, y=0.0)`, not curly braces.
+> [!IMPORTANT]
+> Struct instantiation uses parentheses and equals signs: `Point(x=0.0, y=0.0)`, not curly braces.
 
 ### Struct Methods
 
@@ -500,7 +506,8 @@ fn main():
     println(f"Distance: {dist1}")
 ```
 
-> **Note:** The `self` parameter is automatically inserted if you omit it. The method receives the struct instance as its first parameter.
+> [!NOTE]
+> The `self` parameter is automatically inserted if you omit it. The method receives the struct instance as its first parameter.
 
 ### Type Aliases
 
@@ -600,7 +607,8 @@ fn main():
             println(f"Failed: {reason}")
 ```
 
-> **Tip:** Pattern matching is exhaustive - you must handle all possible cases. Use `_` as a catch-all if needed.
+> [!TIP]
+> Pattern matching is exhaustive - you must handle all possible cases. Use `_` as a catch-all if needed.
 
 ---
 
@@ -742,7 +750,8 @@ fn main():
     content = io.read_file("data.txt")
 ```
 
-> **Note:** Only built-in primitives are available without imports. Most functionality requires explicit `use` statements.
+> [!NOTE]
+> Only built-in primitives are available without imports. Most functionality requires explicit `use` statements.
 
 ---
 
@@ -790,7 +799,8 @@ fn main():
 - `await handle` - Waits for the task to complete and returns its result
 - Tasks run concurrently, potentially on different threads
 
-> **Tip:** Use tasks for I/O-bound operations or CPU-intensive work that can run in parallel.
+> [!TIP]
+> Use tasks for I/O-bound operations or CPU-intensive work that can run in parallel.
 
 ---
 
@@ -847,7 +857,8 @@ enum Result<T, E>:
 
 These are already available in the standard library, so you typically don't need to define them yourself.
 
-> **Note:** Generic function parameters (like `fn first<T>(...)`) are not yet supported. Use type inference or generic structs instead.
+> [!NOTE]
+> Generic function parameters (like `fn first<T>(...)`) are not yet supported. Use type inference or generic structs instead.
 
 ---
 

@@ -2,7 +2,8 @@
 
 Complete API reference for OtterLang standard library functions and types.
 
-> **Importing modules**: Only the prelude primitives (`print`, `panic`, `len`, strings/lists/maps, enums/Option/Result, arithmetic) are injected automatically. Every other module documented here must be imported explicitly with `use module_name` (e.g. `use http`, `use json as js`) before its dotted members can be referenced.
+> [!NOTE]
+> Only the prelude primitives (`print`, `panic`, `len`, strings/lists/maps, enums/Option/Result, arithmetic) are injected automatically. Every other module documented here must be imported explicitly with `use module_name` (e.g. `use http`, `use json as js`) before its dotted members can be referenced.
 
 ## Table of Contents
 
@@ -209,7 +210,8 @@ Converts a dictionary or array to a JSON string.
 json_str = json.stringify({"key": "value"})
 ```
 
-> **Note:** `stringify()` is specific to JSON serialization. For general-purpose conversions use the built-in `str()` helper described above (the old Pythonic alias relationship has been flipped: `stringify()` now simply calls `str()`).
+> [!NOTE]
+> `stringify()` is specific to JSON serialization. For general-purpose conversions use the built-in `str()` helper described above (the old Pythonic alias relationship has been flipped: `stringify()` now simply calls `str()`).
 
 ## Module: `runtime` - Runtime Utilities
 
