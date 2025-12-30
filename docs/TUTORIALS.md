@@ -64,8 +64,6 @@ Hello, World!
 - `println(...)` - This function prints text to the console and adds a newline.
 - Indentation - Notice the 4 spaces before `println`. OtterLang uses indentation (like Python) to define code blocks.
 
-> [!TIP]
-> Use `print()` instead of `println()` if you don't want a newline after your output.
 
 **Try it yourself:** Modify the program to print your name instead of "Hello, World!".
 
@@ -440,8 +438,6 @@ fn main():
     # {1: 1, 2: 4, 3: 9, 4: 16, 5: 25}
 ```
 
-> [!TIP]
-> Use dictionaries when you need to look up values by a key, and lists when order matters.
 
 ---
 
@@ -474,8 +470,6 @@ fn main():
     println(f"Hello, {person.name}!")
 ```
 
-> [!IMPORTANT]
-> Struct instantiation uses parentheses and equals signs: `Point(x=0.0, y=0.0)`, not curly braces.
 
 ### Struct Methods
 
@@ -799,8 +793,6 @@ fn main():
 - `await handle` - Waits for the task to complete and returns its result
 - Tasks run concurrently, potentially on different threads
 
-> [!TIP]
-> Use tasks for I/O-bound operations or CPU-intensive work that can run in parallel.
 
 ---
 
@@ -902,63 +894,12 @@ Now that you've learned the basics, here are some ways to continue:
 
 ### Recommended Learning Path
 
-1. ✅ **Basics**: Variables, functions, control flow
-2. ✅ **Data Structures**: Lists, dictionaries, structs
-3. ✅ **Error Handling**: Result and Option types
-4. ✅ **Organization**: Modules and code structure
-5. ✅ **Concurrency**: Tasks and async programming
-6. 🚀 **Advanced**: Generic types, FFI, advanced patterns
-
----
-
-## Common Pitfalls
-
-### Struct Instantiation
-
-❌ **Wrong:**
-```otter
-point = Point{x: 0.0, y: 0.0}  # This is for pattern matching!
-```
-
-✅ **Correct:**
-```otter
-point = Point(x=0.0, y=0.0)  # Use parentheses and equals
-```
-
-### Pattern Matching vs Instantiation
-
-- **Instantiation**: `Point(x=0.0, y=0.0)` - creates a new struct
-- **Pattern Matching**: `Point{x, y}` - destructures an existing struct
-
-### Missing Imports
-
-❌ **Wrong:**
-```otter
-fn main():
-    data = json.parse('{}')  # Error: json not imported
-```
-
-✅ **Correct:**
-```otter
-use json
-
-fn main():
-    data = json.parse('{}')
-```
-
-### Type Annotations
-
-While type inference is helpful, explicit types make code clearer:
-
-```otter
-# Good - explicit types
-fn process(items: list<int>) -> int:
-    return len(items)
-
-# Also works, but less clear
-fn process(items):
-    return len(items)
-```
+1. **Basics**: Variables, functions, control flow
+2. **Data Structures**: Lists, dictionaries, structs
+3. **Error Handling**: Result and Option types
+4. **Organization**: Modules and code structure
+5. **Concurrency**: Tasks and async programming
+6. **Advanced**: Generic types, FFI, advanced patterns
 
 ---
 
@@ -968,4 +909,4 @@ fn process(items):
 - **Examples**: Check `examples/` directory for working code
 - **API Reference**: See [API_REFERENCE.md](API_REFERENCE.md) for standard library
 
-Happy coding with OtterLang! 🦦
+Happy coding with OtterLang!
