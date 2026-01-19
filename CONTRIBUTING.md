@@ -9,7 +9,7 @@ Thank you for your interest in contributing to OtterLang! This guide will help y
 First, clone the OtterLang repository:
 
 ```bash
-git clone https://github.com/jonathanmagambo/otterlang.git
+git clone https://github.com/Ottrlang/otterlang/.git
 cd otterlang
 ```
 
