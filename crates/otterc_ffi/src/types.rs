@@ -45,6 +45,12 @@ pub enum TypeSpec {
     F64,
     Str,
     Opaque,
+    /// List/Vector type with element type
+    List(Box<TypeSpec>),
+    /// Map/HashMap type with key and value types
+    Map(Box<TypeSpec>, Box<TypeSpec>),
+    /// Option type with inner type
+    Option(Box<TypeSpec>),
 }
 
 impl TypeSpec {
@@ -55,7 +61,7 @@ impl TypeSpec {
             TypeSpec::I32 => "i32",
             TypeSpec::I64 | TypeSpec::Opaque => "i64",
             TypeSpec::F64 => "f64",
-            TypeSpec::Str => "*const ::std::os::raw::c_char",
+            TypeSpec::Str | TypeSpec::List(_) | TypeSpec::Map(_, _) | TypeSpec::Option(_) => "*const ::std::os::raw::c_char",
         }
     }
 
@@ -65,7 +71,7 @@ impl TypeSpec {
             TypeSpec::Bool => "false",
             TypeSpec::I32 | TypeSpec::I64 | TypeSpec::Opaque => "0",
             TypeSpec::F64 => "0.0",
-            TypeSpec::Str => "::std::ptr::null_mut()",
+            TypeSpec::Str | TypeSpec::List(_) | TypeSpec::Map(_, _) | TypeSpec::Option(_) => "::std::ptr::null_mut()",
         }
     }
 
@@ -77,7 +83,9 @@ impl TypeSpec {
             TypeSpec::I64 => "FfiType::I64",
             TypeSpec::F64 => "FfiType::F64",
             TypeSpec::Str => "FfiType::Str",
-            TypeSpec::Opaque => "FfiType::Opaque",
+            TypeSpec::Opaque | TypeSpec::Option(_) => "FfiType::Opaque",
+            TypeSpec::List(_) => "FfiType::List",
+            TypeSpec::Map(_, _) => "FfiType::Map",
         }
     }
 }

@@ -1340,7 +1340,9 @@ fn type_spec_to_ffi_helper(
         TypeSpec::I64 => Ok(FfiType::I64),
         TypeSpec::F64 => Ok(FfiType::F64),
         TypeSpec::Str => Ok(FfiType::Str),
-        TypeSpec::Opaque => Ok(FfiType::Opaque),
+        TypeSpec::Opaque | TypeSpec::Option(_) => Ok(FfiType::Opaque),
+        TypeSpec::List(_) => Ok(FfiType::List),
+        TypeSpec::Map(_, _) => Ok(FfiType::Map),
     }
 }
 
