@@ -1,8 +1,8 @@
-use rust:rand
+use rand
 
 fn main:
-    let num = rand.random_f64()
-    println("Random number: {}", num)
+    let num = rand.float()
+    println(f"Random number: {num}")
     
-    let num2 = rand.random_f64_try()
-    println("Random number (try): {}", num2)
+    let num2 = rand.int(1, 100)
+    println(f"Random integer: {num2}")
